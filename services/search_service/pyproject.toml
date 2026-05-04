@@ -1,0 +1,12 @@
+[project]
+name = "codex-ecommerce-search-service"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "certifi>=2024.7",
+  "fastapi>=0.115,<1",
+  "pymongo>=4.8,<5",
+  "pydantic>=2.11,<3",
+  "starlette>=0.46,<2",
+  "uvicorn>=0.30,<1",
+]

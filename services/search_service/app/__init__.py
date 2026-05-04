@@ -1,0 +1,2 @@
+"""Search Service application package."""
+

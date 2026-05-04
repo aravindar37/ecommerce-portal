@@ -1,0 +1,10 @@
+Metadata-Version: 2.4
+Name: codex-ecommerce-core-service
+Version: 0.1.0
+Requires-Python: >=3.11
+Requires-Dist: argon2-cffi<26,>=23.1
+Requires-Dist: certifi>=2024.7
+Requires-Dist: fastapi<1,>=0.115
+Requires-Dist: pymongo<5,>=4.8
+Requires-Dist: pydantic<3,>=2.11
+Requires-Dist: uvicorn<1,>=0.30

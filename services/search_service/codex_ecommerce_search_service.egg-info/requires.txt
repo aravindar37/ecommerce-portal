@@ -1,0 +1,5 @@
+certifi>=2024.7
+fastapi<1,>=0.115
+pymongo<5,>=4.8
+pydantic<3,>=2.11
+uvicorn<1,>=0.30
