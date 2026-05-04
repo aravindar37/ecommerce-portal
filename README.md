@@ -2,7 +2,7 @@
 
 Demo fashion ecommerce application with three Python/FastAPI backend services, a Next.js/React frontend, MongoDB Atlas product/vector storage, semantic search, and Codex-powered shopping and support agents.
 
-The authoritative product and engineering spec is in [ecommerce-demo-spec.md](./ecommerce-demo-spec.md).
+The authoritative product and engineering spec is in [ecommerce-demo-spec.md](./codex_workspace/ecommerce-demo-spec.md).
 
 ## How It Is Set Up
 
@@ -39,8 +39,16 @@ Service boundaries matter:
 │   ├── api/                         # pytest API contracts
 │   └── e2e/                         # Playwright browser flows
 ├── .env.example
-├── ecommerce-demo-spec.md
-└── task-log.md
+└── codex_workspace/                  # specs, task logs, and review docs
+    ├── ecommerce-demo-spec.md
+    ├── task-log.md
+    ├── codex-rules.md
+    ├── chat_service_tasks.md
+    ├── core_service_tasks.md
+    ├── search_service_tasks.md
+    ├── ux-tasks.md
+    ├── code-review-comments.md
+    └── ux-design-review-comments.md
 ```
 
 ## Prerequisites
