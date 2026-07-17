@@ -64,7 +64,9 @@ class AtlasIndexManager:
             "hybridSearch": {
                 "enabled": True,
                 "fullTextCollection": "products",
-                "vectorCollection": "productEmbeddings",
+                "vectorCollection": "products",
+                "embeddingMode": "atlas_automated",
+                "embeddingField": "description",
                 "filtersAppliedTo": ["fullText", "vector"],
                 "fusion": {"vectorWeight": 0.6, "fullTextWeight": 0.4},
             },
@@ -96,30 +98,27 @@ class AtlasIndexManager:
         }
 
     def vector_index_definition(self) -> dict[str, object]:
-        """Return the Atlas Vector Search index definition for product embeddings."""
+        """Return the Atlas Automated Embedding index definition for product descriptions."""
 
         return {
             "fields": [
                 {
-                    "type": "vector",
-                    "path": "embedding",
+                    "type": "autoEmbed",
+                    "modality": "text",
+                    "path": "description",
+                    "model": self.config.embedding_model,
                     "numDimensions": self.config.embedding_dimensions,
                     "similarity": "cosine",
                 },
-                {"type": "filter", "path": "productId"},
-                {"type": "filter", "path": "provider"},
-                {"type": "filter", "path": "model"},
-                {"type": "filter", "path": "dimensions"},
-                {"type": "filter", "path": "textTemplateVersion"},
-                {"type": "filter", "path": "metadata.gender"},
-                {"type": "filter", "path": "metadata.masterCategory"},
-                {"type": "filter", "path": "metadata.subCategory"},
-                {"type": "filter", "path": "metadata.articleType"},
-                {"type": "filter", "path": "metadata.baseColour"},
-                {"type": "filter", "path": "metadata.season"},
-                {"type": "filter", "path": "metadata.usage"},
-                {"type": "filter", "path": "metadata.priceAmount"},
-                {"type": "filter", "path": "metadata.isActive"},
+                {"type": "filter", "path": "gender"},
+                {"type": "filter", "path": "masterCategory"},
+                {"type": "filter", "path": "subCategory"},
+                {"type": "filter", "path": "articleType"},
+                {"type": "filter", "path": "baseColour"},
+                {"type": "filter", "path": "season"},
+                {"type": "filter", "path": "usage"},
+                {"type": "filter", "path": "price.amount"},
+                {"type": "filter", "path": "isActive"},
             ]
         }
 
@@ -133,8 +132,8 @@ class AtlasIndexManager:
                 "type": "search",
                 "definition": self.product_search_index_definition(),
             },
-            "productEmbeddings": {
-                "collection": "productEmbeddings",
+            "productsVector": {
+                "collection": "products",
                 "name": self.config.mongodb_vector_index_name,
                 "type": "vectorSearch",
                 "definition": self.vector_index_definition(),

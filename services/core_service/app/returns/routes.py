@@ -7,7 +7,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Request, Response, status
 
 from app.api.envelope import fail, ok
-from app.dependencies import anonymous_id_from_request, current_user_required
+from app.dependencies import anonymous_id_from_request, current_user_or_on_behalf
 from app.models import CreateReturnRequest, ReturnEligibilityRequest
 from app.store import Json, store
 
@@ -17,7 +17,7 @@ router = APIRouter(prefix="/api/returns", tags=["returns"])
 @router.post("/check-eligibility")
 def check_eligibility(
     payload: ReturnEligibilityRequest,
-    user: Annotated[Json, Depends(current_user_required)],
+    user: Annotated[Json, Depends(current_user_or_on_behalf)],
 ) -> dict[str, object]:
     """Check whether an order item can be returned."""
 
@@ -38,7 +38,7 @@ def create_return(
     payload: CreateReturnRequest,
     request: Request,
     response: Response,
-    user: Annotated[Json, Depends(current_user_required)],
+    user: Annotated[Json, Depends(current_user_or_on_behalf)],
 ) -> dict[str, object]:
     """Create a customer return request."""
 

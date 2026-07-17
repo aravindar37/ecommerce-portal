@@ -14,6 +14,8 @@ from app.config import settings
 from app.database import mongo
 from app.observability import DebugRequestLoggingMiddleware, configure_logging
 from app.security import InMemoryRateLimitMiddleware, parse_cors_origins
+from app.voice.routes import router as voice_router
+from app.voice.admin import router as voice_admin_router
 
 configure_logging()
 app = FastAPI(title="Codex Ecommerce Chat Service")
@@ -32,6 +34,8 @@ app.add_middleware(
     requests_per_minute=settings.rate_limit_chat_per_minute,
 )
 app.include_router(api_router)
+app.include_router(voice_router)
+app.include_router(voice_admin_router)
 
 
 @app.on_event("startup")

@@ -77,6 +77,7 @@ class MongoConnection:
         self._drop_index_if_exists("carts", "userId_1_anonymousId_1_status_1")
 
         self.collection("users").create_index("email", unique=True)
+        self.collection("users").create_index("phoneNumber", unique=True, sparse=True)
 
         self.collection("sessions").create_index("sessionTokenHash", unique=True)
         self.collection("sessions").create_index("expiresAt", expireAfterSeconds=0)

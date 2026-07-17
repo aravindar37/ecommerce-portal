@@ -24,11 +24,24 @@ async function fetchCoreAdmin<T>(path: string): Promise<T | null> {
   return payload.data;
 }
 
+async function fetchChatAdmin<T>(path: string): Promise<T | null> {
+  const token = process.env.TEST_ADMIN_TOKEN;
+  if (!token) return null;
+  const response = await fetch(`${process.env.CHAT_SERVICE_BASE_URL ?? "http://localhost:4002"}${path}`, {
+    headers: { authorization: `Bearer ${token}` },
+    cache: "no-store"
+  });
+  if (!response.ok) return null;
+  const payload = (await response.json()) as Envelope<T>;
+  return payload.data;
+}
+
 export default async function AdminPage() {
   const requestHeaders = await headers();
   const host = requestHeaders.get("host") ?? "localhost:3000";
   const config = await fetchCoreAdmin<AdminConfig>("/api/admin/config");
   const activity = await fetchCoreAdmin<{ items: unknown[] }>("/api/admin/activity-events?limit=20");
+  const voiceCalls = await fetchChatAdmin<{ items: Array<{ disposition?: string; durationSeconds?: number; escalated?: boolean; verificationOutcome?: string; transcriptSummary?: string }> }>("/api/admin/voice/call-sessions?limit=10");
 
   return (
     <main className="main">
@@ -62,6 +75,15 @@ export default async function AdminPage() {
         <div className="panel">
           <h2>Activity funnel</h2>
           <p>{activity?.items.length ?? 0} recent captured events</p>
+        </div>
+        <div className="panel">
+          <h2>Recent voice calls</h2>
+          {voiceCalls?.items.length ? voiceCalls.items.map((call, index) => (
+            <p className="meta" key={index}>
+              {call.disposition ?? "unknown"} · {call.durationSeconds ?? 0}s · {call.verificationOutcome ?? "pending"}{call.escalated ? " · escalated" : ""}
+              {call.transcriptSummary ? ` — ${call.transcriptSummary}` : ""}
+            </p>
+          )) : <p className="meta">No voice calls yet.</p>}
         </div>
       </section>
     </main>

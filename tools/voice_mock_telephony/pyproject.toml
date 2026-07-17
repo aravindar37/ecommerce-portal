@@ -1,0 +1,8 @@
+[project]
+name = "voice-mock-telephony"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "PyAudio>=0.2.14",
+  "websockets>=13,<16",
+]

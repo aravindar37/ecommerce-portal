@@ -55,6 +55,7 @@ def build_run_context(
     agent_id: str,
     request_context: dict[str, object],
     session_context: dict[str, object],
+    on_behalf_user_id: str | None = None,
 ) -> AgentRunContext:
     """Create an authenticated agent run context."""
 
@@ -71,5 +72,6 @@ def build_run_context(
         retry_policy=retry_policy(),
         trace_id=uuid.uuid4().hex,
         started_at=now_iso(),
+        on_behalf_user_id=on_behalf_user_id,
     )
 

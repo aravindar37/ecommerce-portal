@@ -28,6 +28,9 @@ TOOL_POLICIES: dict[str, ToolPolicy] = {
     "get_order": ToolPolicy("get_order", True, categories=("support", "returns")),
     "check_return_eligibility": ToolPolicy("check_return_eligibility", True, categories=("support", "returns")),
     "get_return_policy": ToolPolicy("get_return_policy", True, categories=("support", "returns")),
+    "verify_caller_by_order": ToolPolicy("verify_caller_by_order", True, categories=("voice", "identity")),
+    "get_payment_details": ToolPolicy("get_payment_details", True, categories=("voice", "support")),
+    "get_shipment_tracking": ToolPolicy("get_shipment_tracking", True, categories=("voice", "support")),
     "request_add_to_cart_confirmation": ToolPolicy("request_add_to_cart_confirmation", False, True, categories=("shopping", "cart")),
     "request_create_return_confirmation": ToolPolicy("request_create_return_confirmation", False, True, categories=("support", "returns")),
     "request_create_support_ticket_confirmation": ToolPolicy(
@@ -36,6 +39,7 @@ TOOL_POLICIES: dict[str, ToolPolicy] = {
         True,
         categories=("support",),
     ),
+    "request_update_order_confirmation": ToolPolicy("request_update_order_confirmation", False, True, categories=("voice", "support")),
 }
 
 

@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from .models import AgentRunContext
-from .prompts import shopping_prompt, support_prompt
+from .prompts import shopping_prompt, support_prompt, voice_prompt
 
 
 @dataclass(frozen=True)
@@ -62,9 +62,37 @@ SUPPORT_AGENT = AgentSpec(
     requires_hitl_tools=("request_create_return_confirmation", "request_create_support_ticket_confirmation"),
 )
 
+VOICE_SUPPORT_AGENT = AgentSpec(
+    agent_id="voice_support",
+    display_name="Voice Support",
+    description="Verified voice support for orders, payments, shipment, returns, and constrained order updates.",
+    session_type="voice_support",
+    tool_names=(
+        "verify_caller_by_order",
+        "list_orders",
+        "get_order",
+        "get_payment_details",
+        "get_shipment_tracking",
+        "check_return_eligibility",
+        "get_return_policy",
+        "get_product",
+        "request_create_return_confirmation",
+        "request_update_order_confirmation",
+        "request_create_support_ticket_confirmation",
+    ),
+    system_prompt_builder=voice_prompt,
+    memory_scope="support",
+    requires_hitl_tools=(
+        "request_create_return_confirmation",
+        "request_update_order_confirmation",
+        "request_create_support_ticket_confirmation",
+    ),
+)
+
 AGENT_SPECS = {
     SHOPPING_AGENT.session_type: SHOPPING_AGENT,
     SUPPORT_AGENT.session_type: SUPPORT_AGENT,
+    VOICE_SUPPORT_AGENT.session_type: VOICE_SUPPORT_AGENT,
 }
 
 

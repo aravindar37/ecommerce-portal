@@ -69,6 +69,7 @@ def default_state() -> Json:
         "agentInterrupts": [],
         "chatEpisodes": [],
         "chatMemories": [],
+        "voiceCallSessions": [],
     }
 
 
@@ -250,6 +251,81 @@ class ChatStore:
         has_more = len(sessions) > bounded_limit
         return {"items": items, "hasMore": has_more, "nextCursor": items[-1]["_id"] if has_more and items else None}
 
+    def create_voice_call_session(self, call_id: str, caller_phone_masked: str | None, context: Json | None = None) -> Json:
+        """Create one unauthenticated voice-session record at stream start."""
+
+        record = {
+            "_id": new_id(),
+            "callId": call_id,
+            "userId": None,
+            "chatSessionId": None,
+            "twilioCallSid": None,
+            "direction": "inbound",
+            "fromNumberMasked": caller_phone_masked,
+            "startedAt": now_iso(),
+            "endedAt": None,
+            "durationSeconds": None,
+            "verificationOutcome": "pending",
+            "disposition": "active",
+            "escalated": False,
+            "supportTicketNumber": None,
+            "recordingS3Bucket": None,
+            "recordingS3Key": None,
+            "transcriptSummary": "",
+            "sttRequestCount": 0,
+            "ttsRequestCount": 0,
+            "context": clone(context or {}),
+            "createdAt": now_iso(),
+            "updatedAt": now_iso(),
+        }
+        if mongo.configured:
+            mongo.collection("voiceCallSessions").insert_one(dict(record))
+        else:
+            self.state["voiceCallSessions"].append(record)
+            self.save()
+        return clone(record)
+
+    def update_voice_call_session(self, call_id: str, updates: Json) -> Json | None:
+        """Apply server-generated lifecycle updates without exposing raw caller data."""
+
+        safe_updates = clone(updates)
+        safe_updates["updatedAt"] = now_iso()
+        if mongo.configured:
+            mongo.collection("voiceCallSessions").update_one({"callId": call_id}, {"$set": safe_updates})
+            doc = mongo.collection("voiceCallSessions").find_one({"callId": call_id})
+            return normalize(doc) if doc else None
+        record = next((item for item in self.state["voiceCallSessions"] if item["callId"] == call_id), None)
+        if not record:
+            return None
+        record.update(safe_updates)
+        self.save()
+        return clone(record)
+
+    def bind_session_to_user(self, session_id: str, user_id: str) -> Json | None:
+        """Attach an initially anonymous voice session to its verified caller."""
+
+        updates = {"userId": user_id, "updatedAt": now_iso()}
+        if mongo.configured:
+            mongo.collection("chatSessions").update_one({"_id": session_id}, {"$set": updates})
+            doc = mongo.collection("chatSessions").find_one({"_id": session_id})
+            return normalize(doc) if doc else None
+        session = next((item for item in self.state["chatSessions"] if item["_id"] == session_id), None)
+        if not session:
+            return None
+        session.update(updates)
+        self.save()
+        return clone(session)
+
+    def list_voice_call_sessions(self, limit: int = 50) -> list[Json]:
+        """Return recent voice calls for the restricted admin console."""
+
+        bounded_limit = min(max(limit, 1), 100)
+        if mongo.configured:
+            docs = list(mongo.collection("voiceCallSessions").find({}).sort("startedAt", -1).limit(bounded_limit))
+            return [normalize(doc) for doc in docs]
+        records = sorted(self.state["voiceCallSessions"], key=lambda item: item.get("startedAt") or "", reverse=True)
+        return clone(records[:bounded_limit])
+
     def create_action(self, session_id: str, user_id: str, action_type: str, payload: Json) -> Json:
         """Create a pending mutating action."""
 
@@ -281,6 +357,30 @@ class ChatStore:
             return normalize(doc) if doc else None
         action = next((item for item in self.state["pendingActions"] if item["_id"] == action_id and item["userId"] == user_id), None)
         return clone(action) if action else None
+
+    def latest_pending_action(self, session_id: str, user_id: str) -> Json | None:
+        """Return the most recent unexpired action for one verified voice session."""
+
+        now = datetime.now(UTC)
+        if mongo.configured:
+            doc = mongo.collection("pendingActions").find_one(
+                {"sessionId": session_id, "userId": user_id, "status": "pending", "expiresAt": {"$gt": now}},
+                sort=[("createdAt", -1)],
+            )
+            return normalize(doc) if doc else None
+        candidates = []
+        for action in self.state["pendingActions"]:
+            if action.get("sessionId") != session_id or action.get("userId") != user_id or action.get("status") != "pending":
+                continue
+            expires_at = action.get("expiresAt")
+            try:
+                expires = datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if expires > now:
+                candidates.append(action)
+        candidates.sort(key=lambda action: str(action.get("createdAt") or ""), reverse=True)
+        return clone(candidates[0]) if candidates else None
 
     def complete_action(self, action: Json, status: str, output: Json) -> Json:
         """Complete or cancel a pending action."""

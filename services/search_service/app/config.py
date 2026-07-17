@@ -23,11 +23,11 @@ class SearchServiceSettings(BaseModel):
     product_embeddings_jsonl_path: Path = Field(default=Path("./artifacts/embeddings/product_embeddings.jsonl"))
     mongodb_uri: str = Field(default="")
     mongodb_db: str = Field(default="ecommerce_demo")
-    mongodb_vector_index_name: str = Field(default="product_embeddings_ollama_768")
+    mongodb_vector_index_name: str = Field(default="product_embeddings_voyage")
     mongodb_search_index_name: str = Field(default="products_keyword")
-    embedding_provider: str = Field(default="ollama")
-    embedding_model: str = Field(default="nomic-embed-text:v1.5")
-    embedding_dimensions: int = Field(default=768)
+    embedding_provider: str = Field(default="mongodb_atlas_autoembed")
+    embedding_model: str = Field(default="voyage-4")
+    embedding_dimensions: int = Field(default=1024)
     embedding_text_template_version: str = Field(default="product-v1")
     embedding_text_max_chars: int = Field(default=4000)
     embedding_batch_size: int = Field(default=8)
@@ -60,11 +60,11 @@ class SearchServiceSettings(BaseModel):
             ),
             mongodb_uri=os.getenv("MONGODB_URI", ""),
             mongodb_db=os.getenv("MONGODB_DB", "ecommerce_demo"),
-            mongodb_vector_index_name=os.getenv("MONGODB_VECTOR_INDEX_NAME", "product_embeddings_ollama_768"),
+            mongodb_vector_index_name=os.getenv("MONGODB_VECTOR_INDEX_NAME", "product_embeddings_voyage"),
             mongodb_search_index_name=os.getenv("MONGODB_SEARCH_INDEX_NAME", "products_keyword"),
-            embedding_provider=os.getenv("EMBEDDING_PROVIDER", "ollama"),
-            embedding_model=os.getenv("EMBEDDING_MODEL", "nomic-embed-text:v1.5"),
-            embedding_dimensions=int(os.getenv("EMBEDDING_DIMENSIONS", "768")),
+            embedding_provider=os.getenv("EMBEDDING_PROVIDER", "mongodb_atlas_autoembed"),
+            embedding_model=os.getenv("EMBEDDING_MODEL", "voyage-4"),
+            embedding_dimensions=int(os.getenv("EMBEDDING_DIMENSIONS", "1024")),
             embedding_text_template_version=os.getenv("EMBEDDING_TEXT_TEMPLATE_VERSION", "product-v1"),
             embedding_text_max_chars=int(os.getenv("EMBEDDING_TEXT_MAX_CHARS", "4000")),
             embedding_batch_size=int(os.getenv("EMBEDDING_BATCH_SIZE", "8")),

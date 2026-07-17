@@ -16,7 +16,7 @@ from fastapi.responses import RedirectResponse
 from app.api.envelope import fail, ok
 from app.config import settings
 from app.dependencies import SESSION_COOKIE_NAME, current_session_token, current_user_required
-from app.models import LoginRequest, PasswordResetConfirmRequest, PasswordResetRequest, RegisterRequest, SavePreferenceRequest
+from app.models import LoginRequest, PasswordResetConfirmRequest, PasswordResetRequest, RegisterRequest, SavePreferenceRequest, UpdatePhoneRequest
 from app.security import is_configured_secret
 from app.store import Json, store
 
@@ -125,6 +125,23 @@ def save_preference(
     """Save one customer preference."""
 
     return ok(store.update_user_preference(user["_id"], payload.key, payload.value))
+
+
+@router.patch("/me/phone")
+def set_development_verified_phone(
+    payload: UpdatePhoneRequest,
+    user: Annotated[Json, Depends(current_user_required)],
+) -> dict[str, object]:
+    """Set a verified phone only for local development voice demos."""
+
+    try:
+        return ok(store.set_development_verified_phone(user["_id"], payload.phoneNumber))
+    except ValueError as exc:
+        if str(exc) == "PHONE_NUMBER_ALREADY_EXISTS":
+            fail(409, "PHONE_NUMBER_ALREADY_EXISTS", "That phone number is already assigned to another account.")
+        if str(exc) == "PHONE_VERIFICATION_NOT_AVAILABLE":
+            fail(403, "PHONE_VERIFICATION_NOT_AVAILABLE", "Development phone verification is not available in this environment.")
+        raise
 
 
 @router.post("/auth/logout")

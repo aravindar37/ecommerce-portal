@@ -28,6 +28,10 @@ ALLOWED_EVENT_TYPES = {
     "support_ticket_created",
     "assistant_opened",
     "assistant_product_recommended",
+    "voice_call_started",
+    "voice_call_verified",
+    "voice_call_escalated",
+    "voice_call_ended",
 }
 
 SENSITIVE_KEY_PARTS = ("apikey", "api_key", "secret", "password", "token", "authorization")

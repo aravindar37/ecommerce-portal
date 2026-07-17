@@ -47,6 +47,7 @@ class AgentRunContext:
     retry_policy: AgentRetryPolicy
     trace_id: str
     started_at: str
+    on_behalf_user_id: str | None = None
 
 
 @dataclass

@@ -39,6 +39,12 @@ def normalize_email(email: str) -> str:
     return email.strip().lower()
 
 
+def normalize_phone_number(phone_number: str) -> str:
+    """Normalize an already E.164-validated phone number."""
+
+    return phone_number.strip()
+
+
 def hash_password(password: str, salt: str | None = None) -> str:
     if settings.password_hash_algorithm == "argon2id" and salt is None:
         try:
@@ -205,6 +211,8 @@ class CoreStore:
             "_id": new_id(),
             "email": email,
             "emailVerified": True,
+            "phoneNumber": None,
+            "phoneVerified": False,
             "name": "Demo Admin",
             "image": None,
             "passwordHash": hash_password(self.config.admin_seed_password),
@@ -306,6 +314,71 @@ class CoreStore:
             return self.normalize_mongo_record(self.mongo_collection("users").find_one({"_id": user_id}))
         return next((u for u in self.state["users"] if u["_id"] == user_id), None)
 
+    def find_verified_user_by_phone(self, phone_number: str) -> Json | None:
+        """Return the unique verified user matched by a caller ANI."""
+
+        normalized = normalize_phone_number(phone_number)
+        if mongo.configured:
+            return self.normalize_mongo_record(
+                self.mongo_collection("users").find_one({"phoneNumber": normalized, "phoneVerified": True})
+            )
+        return next(
+            (
+                user
+                for user in self.state["users"]
+                if user.get("phoneNumber") == normalized and user.get("phoneVerified") is True
+            ),
+            None,
+        )
+
+    def set_development_verified_phone(self, user_id: str, phone_number: str) -> Json:
+        """Set a verified phone number in development only.
+
+        This endpoint intentionally exists only until a real SMS verification
+        provider is selected. Production callers must not self-verify a number.
+        """
+
+        if self.config.app_env != "development":
+            raise ValueError("PHONE_VERIFICATION_NOT_AVAILABLE")
+        user = self.find_user_by_id(user_id)
+        if not user:
+            raise ValueError("USER_NOT_FOUND")
+        normalized = normalize_phone_number(phone_number)
+        existing = self.find_verified_user_by_phone(normalized)
+        if existing and existing["_id"] != user_id:
+            raise ValueError("PHONE_NUMBER_ALREADY_EXISTS")
+        user["phoneNumber"] = normalized
+        user["phoneVerified"] = True
+        user["updatedAt"] = now_iso()
+        if mongo.configured:
+            try:
+                self.mongo_collection("users").update_one(
+                    {"_id": user_id},
+                    {"$set": {"phoneNumber": normalized, "phoneVerified": True, "updatedAt": user["updatedAt"]}},
+                )
+            except Exception as exc:
+                if "duplicate" in str(exc).lower():
+                    raise ValueError("PHONE_NUMBER_ALREADY_EXISTS") from exc
+                raise StoreError(f"Unable to save user phone number: {exc}") from exc
+        else:
+            self.save()
+        return self.public_user(user)
+
+    def verify_caller_by_order(self, order_number: str, last_name: str | None, postal_code: str | None) -> str | None:
+        """Return an owning user ID only when one supplied proof matches."""
+
+        if mongo.configured:
+            order = self.normalize_mongo_record(self.mongo_collection("orders").find_one({"orderNumber": order_number}))
+        else:
+            order = next((item for item in self.state["orders"] if item.get("orderNumber") == order_number), None)
+        if not order:
+            return None
+        address = order.get("shippingAddress") or {}
+        name = str(address.get("name") or "").strip().lower().split()
+        name_matches = bool(last_name and name and name[-1] == last_name.strip().lower())
+        postal_matches = bool(postal_code and str(address.get("postalCode") or "").strip() == postal_code.strip())
+        return str(order["userId"]) if name_matches or postal_matches else None
+
     def register_user(self, email: str, password: str, name: str) -> Json:
         normalized = normalize_email(email)
         if self.find_user_by_email(normalized):
@@ -314,6 +387,8 @@ class CoreStore:
             "_id": new_id(),
             "email": normalized,
             "emailVerified": False,
+            "phoneNumber": None,
+            "phoneVerified": False,
             "name": name,
             "image": None,
             "passwordHash": hash_password(password),
@@ -383,6 +458,8 @@ class CoreStore:
             "_id": new_id(),
             "email": normalized,
             "emailVerified": True,
+            "phoneNumber": None,
+            "phoneVerified": False,
             "name": name,
             "image": image,
             "passwordHash": "",
@@ -724,9 +801,10 @@ class CoreStore:
         if not cart["items"]:
             raise ValueError("CART_EMPTY")
         totals = self.calculate_totals(cart["items"])
+        order_number = self.next_number("order", "ORD")
         order = {
             "_id": new_id(),
-            "orderNumber": self.next_number("order", "ORD"),
+            "orderNumber": order_number,
             "userId": user["_id"],
             "status": "confirmed",
             "items": [
@@ -746,6 +824,7 @@ class CoreStore:
             "shippingAddress": shipping_address,
             "totals": totals,
             "payment": {"provider": payment_method, "status": "paid", "transactionId": f"demo_txn_{new_id()}"},
+            "shipment": self.shipment_for_order_number(order_number),
             "placedAt": now_iso(),
             "estimatedDeliveryAt": (datetime.now(UTC) + timedelta(days=5)).isoformat().replace("+00:00", "Z"),
             "createdAt": now_iso(),
@@ -762,10 +841,39 @@ class CoreStore:
             self.save()
         return clone(order)
 
+    def shipment_for_order_number(self, order_number: str, order_status: str = "confirmed") -> Json:
+        """Create deterministic synthetic shipment facts from an order number."""
+
+        digest = hashlib.sha256(order_number.encode("utf-8")).hexdigest()
+        carrier = ("BlueDart", "Delhivery", "DTDC", "FedEx")[int(digest[:2], 16) % 4]
+        status = "delivered" if order_status == "delivered" else "pending"
+        timestamp = now_iso()
+        tracking_number = f"{carrier[:3].upper()}-{digest[:12].upper()}"
+        return {
+            "carrier": carrier,
+            "trackingNumber": tracking_number,
+            "trackingUrl": f"https://tracking.example.test/{tracking_number}",
+            "status": status,
+            "shippedAt": None,
+            "estimatedDeliveryAt": (datetime.now(UTC) + timedelta(days=5)).isoformat().replace("+00:00", "Z"),
+            "deliveredAt": timestamp if status == "delivered" else None,
+        }
+
+    def _ensure_shipment(self, order: Json) -> Json:
+        if order.get("shipment"):
+            return order
+        order["shipment"] = self.shipment_for_order_number(str(order["orderNumber"]), str(order.get("status") or "confirmed"))
+        order["updatedAt"] = now_iso()
+        if mongo.configured:
+            self.mongo_collection("orders").update_one({"_id": order["_id"]}, {"$set": {"shipment": order["shipment"], "updatedAt": order["updatedAt"]}})
+        else:
+            self.save()
+        return order
+
     def user_orders(self, user: Json) -> list[Json]:
         if mongo.configured:
-            return self._docs(self.mongo_collection("orders").find({"userId": user["_id"]}).sort("createdAt", -1))
-        return [clone(o) for o in self.state["orders"] if o["userId"] == user["_id"]]
+            return [clone(self._ensure_shipment(order)) for order in self._docs(self.mongo_collection("orders").find({"userId": user["_id"]}).sort("createdAt", -1))]
+        return [clone(self._ensure_shipment(order)) for order in self.state["orders"] if order["userId"] == user["_id"]]
 
     def find_order_for_user(self, user: Json, order_id_or_number: str) -> Json | None:
         if mongo.configured:
@@ -773,11 +881,55 @@ class CoreStore:
                 "userId": user["_id"],
                 "$or": [{"_id": order_id_or_number}, {"orderNumber": order_id_or_number}],
             })
-            return self.normalize_mongo_record(doc)
-        return next(
+            return self._ensure_shipment(self.normalize_mongo_record(doc)) if doc else None
+        order = next(
             (o for o in self.state["orders"] if o["userId"] == user["_id"] and (o["_id"] == order_id_or_number or o["orderNumber"] == order_id_or_number)),
             None,
         )
+        return self._ensure_shipment(order) if order else None
+
+    def payment_details(self, user: Json, order_id_or_number: str) -> Json:
+        order = self.find_order_for_user(user, order_id_or_number)
+        if not order:
+            raise ValueError("ORDER_NOT_FOUND")
+        payment = order.get("payment") or {}
+        return {
+            "orderNumber": order["orderNumber"],
+            "status": payment.get("status"),
+            "method": payment.get("provider"),
+            "amount": (order.get("totals") or {}).get("grandTotal"),
+            "currency": (order.get("totals") or {}).get("currency"),
+        }
+
+    def update_order(self, user: Json, order_id_or_number: str, action: str, shipping_address: Json | None) -> Json:
+        order = self.find_order_for_user(user, order_id_or_number)
+        if not order:
+            raise ValueError("ORDER_NOT_FOUND")
+        shipment_status = str((order.get("shipment") or {}).get("status") or "pending")
+        pre_dispatch = shipment_status in {"pending", "label_created"}
+        if action == "cancel":
+            if order.get("status") == "cancelled":
+                return clone(order)
+            if not pre_dispatch:
+                raise ValueError("ORDER_UPDATE_NOT_ALLOWED")
+            order["status"] = "cancelled"
+            order["cancelledAt"] = now_iso()
+            order["cancelledBy"] = user["_id"]
+        elif action == "update_shipping_address":
+            if not pre_dispatch:
+                raise ValueError("ORDER_UPDATE_NOT_ALLOWED")
+            if not shipping_address:
+                raise ValueError("SHIPPING_ADDRESS_REQUIRED")
+            order["shippingAddress"] = clone(shipping_address)
+        else:
+            raise ValueError("UNSUPPORTED_ORDER_UPDATE")
+        order["updatedAt"] = now_iso()
+        if mongo.configured:
+            self.mongo_collection("orders").replace_one({"_id": order["_id"]}, clone(order), upsert=False)
+        else:
+            self.save()
+        self.add_activity("order_updated", {"orderId": order["_id"], "action": action}, user, None)
+        return clone(order)
 
     def checkout_quote(self, user: Json, anonymous_id: str, shipping_address: Json) -> Json:
         cart = self.get_or_create_cart(user, anonymous_id)

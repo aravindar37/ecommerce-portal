@@ -7,7 +7,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Request, Response, status
 
 from app.api.envelope import fail, ok
-from app.dependencies import anonymous_id_from_request, current_user_required
+from app.dependencies import anonymous_id_from_request, current_user_or_on_behalf
 from app.models import AddTicketMessageRequest, CreateSupportTicketRequest
 from app.store import Json, store
 
@@ -19,7 +19,7 @@ def create_ticket(
     payload: CreateSupportTicketRequest,
     request: Request,
     response: Response,
-    user: Annotated[Json, Depends(current_user_required)],
+    user: Annotated[Json, Depends(current_user_or_on_behalf)],
 ) -> dict[str, object]:
     """Create a support ticket."""
 
@@ -34,14 +34,14 @@ def create_ticket(
 
 
 @router.get("")
-def list_tickets(user: Annotated[Json, Depends(current_user_required)]) -> dict[str, object]:
+def list_tickets(user: Annotated[Json, Depends(current_user_or_on_behalf)]) -> dict[str, object]:
     """Return support tickets owned by the current user."""
 
     return ok({"items": store.user_tickets(user)})
 
 
 @router.get("/{ticket_number}")
-def get_ticket(ticket_number: str, user: Annotated[Json, Depends(current_user_required)]) -> dict[str, object]:
+def get_ticket(ticket_number: str, user: Annotated[Json, Depends(current_user_or_on_behalf)]) -> dict[str, object]:
     """Return one owned support ticket."""
 
     ticket = store.find_ticket_for_user(user, ticket_number)
@@ -54,7 +54,7 @@ def get_ticket(ticket_number: str, user: Annotated[Json, Depends(current_user_re
 def add_message(
     ticket_number: str,
     payload: AddTicketMessageRequest,
-    user: Annotated[Json, Depends(current_user_required)],
+    user: Annotated[Json, Depends(current_user_or_on_behalf)],
 ) -> dict[str, object]:
     """Append a customer message to an owned support ticket."""
 

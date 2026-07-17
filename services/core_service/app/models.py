@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -101,6 +101,34 @@ class ActivityEventRequest(BaseModel):
 class SavePreferenceRequest(BaseModel):
     key: str = Field(min_length=1)
     value: Any
+
+
+class UpdatePhoneRequest(BaseModel):
+    """Development-only phone-number verification request."""
+
+    phoneNumber: str = Field(pattern=r"^\+[1-9]\d{1,14}$")
+
+
+class VerifyCallerRequest(BaseModel):
+    """Proof supplied by a voice caller before account data is disclosed."""
+
+    orderNumber: str = Field(min_length=1)
+    lastName: str | None = Field(default=None, min_length=1)
+    postalCode: str | None = Field(default=None, min_length=1)
+    callerPhoneNumber: str | None = Field(default=None, pattern=r"^\+[1-9]\d{1,14}$")
+
+
+class OrderUpdateRequest(BaseModel):
+    """The intentionally narrow set of order changes supported by voice."""
+
+    action: Literal["cancel", "update_shipping_address"]
+    shippingAddress: Address | None = None
+
+
+class InternalActivityEventRequest(BaseModel):
+    userId: str | None = None
+    eventType: Literal["voice_call_started", "voice_call_verified", "voice_call_escalated", "voice_call_ended"]
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class AgentToolAuditLogRequest(BaseModel):

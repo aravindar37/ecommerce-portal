@@ -48,6 +48,18 @@ def first_embedding_metadata(path: Path) -> dict[str, Any]:
 def embedding_status() -> dict[str, object]:
     """Return generated embedding metadata."""
 
+    if settings.embedding_provider == "mongodb_atlas_autoembed":
+        return ok(
+            {
+                "provider": settings.embedding_provider,
+                "model": settings.embedding_model,
+                "dimensions": settings.embedding_dimensions,
+                "textTemplateVersion": None,
+                "vectorIndexName": settings.mongodb_vector_index_name,
+                "embeddingsGenerated": None,
+                "embeddingMode": "atlas_automated",
+            }
+        )
     first = first_embedding_metadata(settings.product_embeddings_jsonl_path)
     return ok(
         {

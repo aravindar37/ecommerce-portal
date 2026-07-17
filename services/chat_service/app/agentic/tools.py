@@ -80,6 +80,18 @@ class _RequestTicketInput(BaseModel):
     order_id: Optional[str] = PydanticField(default=None, description="Related order ID if applicable")
 
 
+class _VerifyCallerInput(BaseModel):
+    order_number: str = PydanticField(description="Order number spoken by the caller")
+    last_name: Optional[str] = PydanticField(default=None, description="Caller last name")
+    postal_code: Optional[str] = PydanticField(default=None, description="Shipping postal code")
+
+
+class _OrderUpdateInput(BaseModel):
+    order_id: str = PydanticField(description="Owned order ID or order number")
+    action: str = PydanticField(description="Exactly cancel or update_shipping_address")
+    shipping_address: Optional[dict[str, Any]] = PydanticField(default=None, description="Full new shipping address for address updates")
+
+
 # ---------------------------------------------------------------------------
 # BoundAgentTool — callable tool bound to one authenticated request context.
 # ---------------------------------------------------------------------------
@@ -194,6 +206,18 @@ def bind_tools(context: AgentRunContext, tool_names: tuple[str, ...]) -> list[An
     ) -> Json:
         return request_create_support_ticket_confirmation(context, category, priority, subject, body, order_id)
 
+    def _verify_caller(order_number: str, last_name: Optional[str] = None, postal_code: Optional[str] = None) -> Json:
+        return verify_caller_by_order(context, order_number, last_name, postal_code)
+
+    def _payment(order_id: str) -> Json:
+        return get_payment_details(context, order_id)
+
+    def _shipment(order_id: str) -> Json:
+        return get_shipment_tracking(context, order_id)
+
+    def _update_confirm(order_id: str, action: str, shipping_address: Optional[dict[str, Any]] = None) -> Json:
+        return request_update_order_confirmation(context, order_id, action, shipping_address)
+
     available: dict[str, BoundAgentTool] = {
         "search_products": BoundAgentTool(
             "search_products",
@@ -241,6 +265,14 @@ def bind_tools(context: AgentRunContext, tool_names: tuple[str, ...]) -> list[An
             _CheckReturnEligibilityInput,
         ),
         "get_return_policy": BoundAgentTool("get_return_policy", "Return the current return policy.", _get_policy),
+        "verify_caller_by_order": BoundAgentTool(
+            "verify_caller_by_order",
+            "Verify caller ownership with an order number plus last name or postal code before accessing order details.",
+            _verify_caller,
+            _VerifyCallerInput,
+        ),
+        "get_payment_details": BoundAgentTool("get_payment_details", "Fetch compact payment details for a verified caller order.", _payment, _GetOrderInput),
+        "get_shipment_tracking": BoundAgentTool("get_shipment_tracking", "Fetch shipment tracking for a verified caller order.", _shipment, _GetOrderInput),
         "request_add_to_cart_confirmation": BoundAgentTool(
             "request_add_to_cart_confirmation",
             "Create a pending add-to-cart confirmation. Does not mutate the cart until the user confirms.",
@@ -258,6 +290,12 @@ def bind_tools(context: AgentRunContext, tool_names: tuple[str, ...]) -> list[An
             "Create a pending support-ticket confirmation. Does not open a ticket until the user confirms.",
             _ticket_confirm,
             _RequestTicketInput,
+        ),
+        "request_update_order_confirmation": BoundAgentTool(
+            "request_update_order_confirmation",
+            "Propose exactly one supported order update. Requires explicit caller confirmation before execution.",
+            _update_confirm,
+            _OrderUpdateInput,
         ),
     }
     return [available[name].as_runtime_tool() for name in tool_names if name in available]
@@ -348,14 +386,47 @@ def get_user_preferences(context: AgentRunContext) -> Json:
     return preferences
 
 
+def _voice_user_id(context: AgentRunContext) -> str:
+    """Return the server-side verified identity required for voice account tools."""
+
+    call_id = str(context.session_context.get("callId") or "")
+    if call_id:
+        # Verification can occur in an earlier tool call in this same agent run.
+        # Read the resolver rather than trusting only the immutable run context.
+        from app.voice.identity import voice_identity
+
+        identity = voice_identity.get(call_id)
+        if identity and identity.verified_user_id and identity.verified:
+            return identity.verified_user_id
+    if context.on_behalf_user_id:
+        return context.on_behalf_user_id
+    raise PermissionError("Caller identity must be verified before order-specific tools can run")
+
+
+def _action_user_id(context: AgentRunContext) -> str:
+    """Use the verified Core user for voice pending actions, never the anonymous call ID."""
+
+    return _voice_user_id(context) if context.session_type == "voice_support" else context.user_id
+
+
 def list_orders(context: AgentRunContext) -> list[Json]:
-    orders = with_retry("list_orders", lambda: core_tools.list_user_orders(context.cookie_header), policy=context.retry_policy, idempotent=True)
+    orders = with_retry(
+        "list_orders",
+        lambda: core_tools.list_voice_orders(_voice_user_id(context)) if context.session_type == "voice_support" else core_tools.list_user_orders(context.cookie_header),
+        policy=context.retry_policy,
+        idempotent=True,
+    )
     _audit(context, "listOrders", {}, {"count": len(orders)})
     return orders
 
 
 def get_order(context: AgentRunContext, order_id: str) -> Json:
-    order = with_retry("get_order", lambda: core_tools.get_order(context.cookie_header, order_id), policy=context.retry_policy, idempotent=True)
+    order = with_retry(
+        "get_order",
+        lambda: core_tools.get_voice_order(_voice_user_id(context), order_id) if context.session_type == "voice_support" else core_tools.get_order(context.cookie_header, order_id),
+        policy=context.retry_policy,
+        idempotent=True,
+    )
     _audit(context, "getOrder", {"orderId": order_id}, {"orderNumber": order.get("orderNumber")})
     return order
 
@@ -363,7 +434,9 @@ def get_order(context: AgentRunContext, order_id: str) -> Json:
 def check_return_eligibility(context: AgentRunContext, order_id: str, order_item_id: str) -> Json:
     eligibility = with_retry(
         "check_return_eligibility",
-        lambda: core_tools.check_return_eligibility(context.cookie_header, order_id, order_item_id),
+        lambda: core_tools.check_voice_return_eligibility(_voice_user_id(context), order_id, order_item_id)
+        if context.session_type == "voice_support"
+        else core_tools.check_return_eligibility(context.cookie_header, order_id, order_item_id),
         policy=context.retry_policy,
         idempotent=True,
     )
@@ -377,10 +450,42 @@ def get_return_policy(context: AgentRunContext) -> Json:
     return policy
 
 
+def verify_caller_by_order(context: AgentRunContext, order_number: str, last_name: Optional[str], postal_code: Optional[str]) -> Json:
+    """Call Core's pre-authorization verification API without revealing order data."""
+
+    call_id = str(context.session_context.get("callId") or "")
+    if call_id:
+        from app.voice.identity import voice_identity
+
+        identity = voice_identity.verify(call_id, order_number, last_name, postal_code)
+        result = {"verified": identity.verified, "userId": identity.verified_user_id, "locked": identity.locked}
+    else:
+        result = core_tools.verify_caller_by_order(
+            order_number,
+            last_name=last_name,
+            postal_code=postal_code,
+            caller_phone_number=str(context.session_context.get("callerPhoneNumber") or "") or None,
+        )
+    _audit(context, "verifyCallerByOrder", {"orderNumber": order_number}, {"verified": bool(result.get("verified"))})
+    return {"verified": bool(result.get("verified")), "userId": result.get("userId"), "locked": bool(result.get("locked"))}
+
+
+def get_payment_details(context: AgentRunContext, order_id: str) -> Json:
+    payment = with_retry("get_payment_details", lambda: core_tools.get_payment_details(_voice_user_id(context), order_id), policy=context.retry_policy, idempotent=True)
+    _audit(context, "getPaymentDetails", {"orderId": order_id}, {"status": payment.get("status")})
+    return payment
+
+
+def get_shipment_tracking(context: AgentRunContext, order_id: str) -> Json:
+    shipment = with_retry("get_shipment_tracking", lambda: core_tools.get_shipment_tracking(_voice_user_id(context), order_id), policy=context.retry_policy, idempotent=True)
+    _audit(context, "getShipmentTracking", {"orderId": order_id}, {"status": shipment.get("status")})
+    return shipment
+
+
 def request_add_to_cart_confirmation(context: AgentRunContext, product_id: str, quantity: int = 1, size: Optional[str] = None) -> Json:
     action = store.create_action(
         context.session_id,
-        context.user_id,
+        _action_user_id(context),
         "add_to_cart",
         {"productId": product_id, "quantity": max(1, int(quantity)), "size": size},
     )
@@ -398,7 +503,7 @@ def request_create_return_confirmation(
 ) -> Json:
     action = store.create_action(
         context.session_id,
-        context.user_id,
+        _action_user_id(context),
         "create_return_request",
         {
             "orderId": order_id,
@@ -428,9 +533,26 @@ def request_create_support_ticket_confirmation(
 ) -> Json:
     action = store.create_action(
         context.session_id,
-        context.user_id,
+        _action_user_id(context),
         "create_support_ticket",
         {"category": category, "priority": priority, "subject": subject, "body": body, "orderId": order_id},
     )
     _audit(context, "createSupportTicket", {"category": category, "priority": priority, "subject": subject}, {"pendingActionId": action["_id"]}, status="blocked")
     return {"pendingActionId": action["_id"], "type": action["type"], "expiresAt": action["expiresAt"]}
+
+
+def request_update_order_confirmation(context: AgentRunContext, order_id: str, action: str, shipping_address: Optional[Json] = None) -> Json:
+    """Create a voice-safe pending cancellation or address-update action."""
+
+    if action not in {"cancel", "update_shipping_address"}:
+        raise ValueError("Unsupported order update action")
+    if action == "update_shipping_address" and not shipping_address:
+        raise ValueError("A shipping address is required for an address update")
+    pending = store.create_action(
+        context.session_id,
+        _action_user_id(context),
+        "update_order",
+        {"orderId": order_id, "action": action, "shippingAddress": shipping_address, "voiceUserId": _voice_user_id(context)},
+    )
+    _audit(context, "updateOrder", {"orderId": order_id, "action": action}, {"pendingActionId": pending["_id"]}, status="blocked")
+    return {"pendingActionId": pending["_id"], "type": pending["type"], "expiresAt": pending["expiresAt"]}

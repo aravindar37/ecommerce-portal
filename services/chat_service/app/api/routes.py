@@ -32,6 +32,13 @@ def health() -> dict[str, object]:
             "agent": agent_service.metadata(),
             "mcp": mcp,
             "database": mongo.health(),
+            "voice": {
+                "enabled": settings.voice_telephony_provider == "local",
+                "telephonyProvider": settings.voice_telephony_provider,
+                "sttConfigured": bool(settings.elevenlabs_api_key.strip()),
+                "ttsConfigured": bool(settings.elevenlabs_api_key.strip() and settings.elevenlabs_voice_id.strip()),
+                "recordingStorageConfigured": bool(settings.aws_region.strip() and settings.aws_s3_call_recordings_bucket.strip()),
+            },
             "ready": bool(mcp["enabled"] and mcp["ready"]),
         }
     )

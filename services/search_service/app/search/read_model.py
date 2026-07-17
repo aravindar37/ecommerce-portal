@@ -386,32 +386,25 @@ class ProductReadModel:
         return [self.normalize_atlas_product(item) for item in self.atlas_collection().aggregate(pipeline)]
 
     def atlas_vector_candidates(self, query: str, filters: Json, limit: int) -> list[Json]:
-        """Run Atlas Vector Search candidates with metadata pre-filtering."""
+        """Run Atlas Automated Embedding search against product descriptions."""
 
-        vector_filter = self.atlas_prefilter_document(filters, "metadata")
-        vector_filter.update(
-            {
-                "provider": self.config.embedding_provider,
-                "model": self.config.embedding_model,
-                "dimensions": self.config.embedding_dimensions,
-                "textTemplateVersion": self.config.embedding_text_template_version,
-                "metadata.isActive": True,
-            }
-        )
+        vector_filter = self.atlas_prefilter_document(filters)
+        vector_filter["isActive"] = True
         pipeline: list[Json] = [
             {
                 "$vectorSearch": {
                     "index": self.config.mongodb_vector_index_name,
-                    "path": "embedding",
-                    "queryVector": self.query_vector(query),
+                    "path": "description",
+                    "query": query,
+                    "model": self.config.embedding_model,
                     "numCandidates": max(limit * 4, 100),
                     "limit": limit,
                     "filter": vector_filter,
                 }
             },
-            {"$project": {"_id": 0, "productId": 1, "vectorScore": {"$meta": "vectorSearchScore"}}},
+            {"$project": {"_id": 0, "productId": "$_id", "vectorScore": {"$meta": "vectorSearchScore"}}},
         ]
-        collection = self._atlas_client[self.config.mongodb_db]["productEmbeddings"]
+        collection = self.atlas_collection()
         return [clone(item) for item in collection.aggregate(pipeline)]
 
     def atlas_hybrid_results(self, query: str, filters: Json, page: int, limit: int) -> Json:

@@ -68,6 +68,9 @@ class MongoChatConnection:
         self.collection("agentInterrupts").create_index([("pendingActionId", 1), ("userId", 1)])
         self.collection("chatMemories").create_index([("userId", 1), ("agentId", 1), ("status", 1), ("updatedAt", -1)])
         self.collection("chatEpisodes").create_index([("userId", 1), ("agentId", 1), ("updatedAt", -1)])
+        self.collection("voiceCallSessions").create_index("callId", unique=True)
+        self.collection("voiceCallSessions").create_index([("userId", 1), ("startedAt", -1)])
+        self.collection("voiceCallSessions").create_index("twilioCallSid", sparse=True)
 
     def health(self) -> dict[str, object]:
         """Return database readiness metadata without exposing connection details."""

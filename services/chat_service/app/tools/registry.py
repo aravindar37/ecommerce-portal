@@ -108,4 +108,18 @@ SUPPORT_TOOLS: list[Json] = [
         ["category", "priority", "subject", "body"],
     ),
     function_tool("get_return_policy", "Return the current demo return window and resolution options.", {}, []),
+    function_tool(
+        "verify_caller_by_order",
+        "Verify a voice caller before accessing order-specific data using an order number plus last name or postal code.",
+        {"orderNumber": {"type": "string"}, "lastName": {"type": "string"}, "postalCode": {"type": "string"}},
+        ["orderNumber"],
+    ),
+    function_tool("get_payment_details", "Return compact payment status, method, amount, and currency for a verified caller order.", {"orderId": {"type": "string"}}, ["orderId"]),
+    function_tool("get_shipment_tracking", "Return shipment status and tracking facts for a verified caller order.", {"orderId": {"type": "string"}}, ["orderId"]),
+    function_tool(
+        "request_update_order_confirmation",
+        "Propose cancelling a pre-dispatch order or updating its pre-dispatch shipping address. Requires explicit confirmation.",
+        {"orderId": {"type": "string"}, "action": {"type": "string", "enum": ["cancel", "update_shipping_address"]}, "shippingAddress": {"type": "object"}},
+        ["orderId", "action"],
+    ),
 ]

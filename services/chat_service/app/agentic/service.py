@@ -27,6 +27,7 @@ class AgentService:
         session: Json,
         message: str,
         request_context: Json,
+        on_behalf_user_id: str | None = None,
     ) -> AgentRunResult:
         """Attempt an agentic answer. Caller may fallback when result has no message."""
 
@@ -49,6 +50,7 @@ class AgentService:
             spec.agent_id,
             request_context,
             session.get("context") or {},
+            on_behalf_user_id=on_behalf_user_id,
         )
         history = [
             {"role": item["role"], "content": item["content"], "metadata": item.get("metadata") or {}}
@@ -87,6 +89,18 @@ class AgentService:
             return shopping_agent.confirm_action(chat_context, action)
         if action["type"] in {"create_return_request", "create_support_ticket"}:
             return support_agent.confirm_action(chat_context, action)
+        if action["type"] == "update_order":
+            from app.tools.core import core_tools
+
+            payload = action["payload"]
+            result = core_tools.update_voice_order(
+                str(payload["voiceUserId"]),
+                str(payload["orderId"]),
+                str(payload["action"]),
+                payload.get("shippingAddress"),
+            )
+            completed = store.complete_action(action, "completed", {"orderId": result.get("_id"), "status": result.get("status")})
+            return {"status": completed["status"], "actionId": completed["_id"], "result": result}
         from app.api.envelope import fail
         fail(400, "UNSUPPORTED_ACTION", "Assistant action type is not supported.")
 

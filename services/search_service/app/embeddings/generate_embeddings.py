@@ -350,6 +350,8 @@ def generate_vectors(texts: list[str], settings: EmbeddingSettings) -> list[list
     """Generate embeddings for one batch using the configured provider."""
 
     provider = settings.provider.lower()
+    if provider == "mongodb_atlas_autoembed":
+        raise EmbeddingError("MongoDB Atlas Automated Embedding generates vectors at index time; do not run the legacy embedding generator")
     if provider == "ollama":
         return embed_with_ollama(texts, settings)
     if provider == "voyage_atlas":

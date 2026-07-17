@@ -18,6 +18,7 @@ class ChatServiceSettings(BaseModel):
     core_service_internal_token: str = Field(default="")
     search_service_internal_token: str = Field(default="")
     chat_service_internal_token: str = Field(default="")
+    test_admin_token: str = Field(default="")
     mongodb_uri: str = Field(default="")
     mongodb_db: str = Field(default="ecommerce_demo")
     chat_service_data_path: Path = Field(default=Path("./artifacts/chat_service/state.json"))
@@ -67,6 +68,24 @@ class ChatServiceSettings(BaseModel):
     log_level: str = Field(default="DEBUG")
     log_request_bodies: bool = Field(default=True)
     log_response_bodies: bool = Field(default=True)
+    elevenlabs_api_key: str = Field(default="")
+    elevenlabs_voice_id: str = Field(default="")
+    elevenlabs_stt_model: str = Field(default="scribe_v2")
+    elevenlabs_stt_api_url: str = Field(default="https://api.elevenlabs.io/v1/speech-to-text")
+    elevenlabs_tts_model: str = Field(default="eleven_flash_v2_5")
+    elevenlabs_tts_api_url: str = Field(default="https://api.elevenlabs.io/v1/text-to-speech")
+    elevenlabs_tts_output_format: str = Field(default="pcm_16000")
+    voice_telephony_provider: str = Field(default="local")
+    voice_stream_ws_auth_token: str = Field(default="")
+    voice_agent_session_type: str = Field(default="voice_support")
+    voice_caller_verification_max_attempts: int = Field(default=2)
+    voice_vad_silence_threshold_db: float = Field(default=-40)
+    voice_vad_silence_duration_ms: int = Field(default=600)
+    voice_vad_min_utterance_ms: int = Field(default=250)
+    voice_turn_max_latency_ms: int = Field(default=3000)
+    aws_region: str = Field(default="")
+    aws_s3_call_recordings_bucket: str = Field(default="")
+    call_recording_retention_days: int = Field(default=1)
 
     @classmethod
     def from_env(cls) -> "ChatServiceSettings":
@@ -80,6 +99,7 @@ class ChatServiceSettings(BaseModel):
             core_service_internal_token=os.getenv("CORE_SERVICE_INTERNAL_TOKEN", ""),
             search_service_internal_token=os.getenv("SEARCH_SERVICE_INTERNAL_TOKEN", ""),
             chat_service_internal_token=os.getenv("CHAT_SERVICE_INTERNAL_TOKEN", ""),
+            test_admin_token=os.getenv("TEST_ADMIN_TOKEN", ""),
             mongodb_uri=os.getenv("MONGODB_URI", ""),
             mongodb_db=os.getenv("MONGODB_DB", "ecommerce_demo"),
             chat_service_data_path=Path(os.getenv("CHAT_SERVICE_DATA_PATH", "./artifacts/chat_service/state.json")),
@@ -129,6 +149,24 @@ class ChatServiceSettings(BaseModel):
             log_level=os.getenv("CHAT_LOG_LEVEL", "DEBUG"),
             log_request_bodies=os.getenv("CHAT_LOG_REQUEST_BODIES", "true").lower() == "true",
             log_response_bodies=os.getenv("CHAT_LOG_RESPONSE_BODIES", "true").lower() == "true",
+            elevenlabs_api_key=os.getenv("ELEVENLABS_API_KEY", ""),
+            elevenlabs_voice_id=os.getenv("ELEVENLABS_VOICE_ID", ""),
+            elevenlabs_stt_model=os.getenv("ELEVENLABS_STT_MODEL", "scribe_v2"),
+            elevenlabs_stt_api_url=os.getenv("ELEVENLABS_STT_API_URL", "https://api.elevenlabs.io/v1/speech-to-text"),
+            elevenlabs_tts_model=os.getenv("ELEVENLABS_TTS_MODEL", "eleven_flash_v2_5"),
+            elevenlabs_tts_api_url=os.getenv("ELEVENLABS_TTS_API_URL", "https://api.elevenlabs.io/v1/text-to-speech"),
+            elevenlabs_tts_output_format=os.getenv("ELEVENLABS_TTS_OUTPUT_FORMAT", "pcm_16000"),
+            voice_telephony_provider=os.getenv("VOICE_TELEPHONY_PROVIDER", "local"),
+            voice_stream_ws_auth_token=os.getenv("VOICE_STREAM_WS_AUTH_TOKEN", ""),
+            voice_agent_session_type=os.getenv("VOICE_AGENT_SESSION_TYPE", "voice_support"),
+            voice_caller_verification_max_attempts=int(os.getenv("VOICE_CALLER_VERIFICATION_MAX_ATTEMPTS", "2")),
+            voice_vad_silence_threshold_db=float(os.getenv("VOICE_VAD_SILENCE_THRESHOLD_DB", "-40")),
+            voice_vad_silence_duration_ms=int(os.getenv("VOICE_VAD_SILENCE_DURATION_MS", "600")),
+            voice_vad_min_utterance_ms=int(os.getenv("VOICE_VAD_MIN_UTTERANCE_MS", "250")),
+            voice_turn_max_latency_ms=int(os.getenv("VOICE_TURN_MAX_LATENCY_MS", "3000")),
+            aws_region=os.getenv("AWS_REGION", ""),
+            aws_s3_call_recordings_bucket=os.getenv("AWS_S3_CALL_RECORDINGS_BUCKET", ""),
+            call_recording_retention_days=int(os.getenv("CALL_RECORDING_RETENTION_DAYS", "1")),
         )
 
 

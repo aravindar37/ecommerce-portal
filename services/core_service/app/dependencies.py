@@ -87,6 +87,34 @@ def require_chat_service(
     return True
 
 
+def current_user_or_on_behalf(
+    core_session: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
+    x_service_token: Annotated[str | None, Header(alias="x-service-token")] = None,
+    x_on_behalf_of_user_id: Annotated[str | None, Header(alias="x-on-behalf-of-user-id")] = None,
+) -> Json:
+    """Resolve a cookie user or a Chat-Service-authenticated verified user.
+
+    The internal mode is deliberately all-or-nothing: both headers must be
+    present and the service token must be valid. The resolved user is then
+    passed through the same ownership checks as browser-authenticated users.
+    """
+
+    user = store.user_for_session_token(core_session)
+    if user:
+        return user
+    if x_service_token or x_on_behalf_of_user_id:
+        if not (
+            is_configured_secret(settings.chat_service_internal_token)
+            and x_service_token == settings.chat_service_internal_token
+            and x_on_behalf_of_user_id
+        ):
+            fail(401, "UNAUTHENTICATED", "Chat Service credentials are required.")
+        user = store.find_user_by_id(x_on_behalf_of_user_id)
+        if user:
+            return user
+    fail(401, "UNAUTHENTICATED", "Authentication is required for this operation.")
+
+
 def redact_sensitive(value: Any) -> Any:
     """Recursively remove sensitive values from admin-facing payloads."""
 
