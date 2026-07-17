@@ -60,7 +60,16 @@ def title_from_content(content: str) -> str:
 def default_state() -> Json:
     """Return empty Chat Service state."""
 
-    return {"chatSessions": [], "chatMessages": [], "pendingActions": []}
+    return {
+        "chatSessions": [],
+        "chatMessages": [],
+        "pendingActions": [],
+        "agentRuns": [],
+        "agentToolCalls": [],
+        "agentInterrupts": [],
+        "chatEpisodes": [],
+        "chatMemories": [],
+    }
 
 
 class ChatStore:
@@ -80,6 +89,8 @@ class ChatStore:
             return
         try:
             self.state = json.loads(self.path.read_text(encoding="utf-8"))
+            for key, value in default_state().items():
+                self.state.setdefault(key, value)
         except (OSError, json.JSONDecodeError) as exc:
             raise ChatStoreError(f"Unable to load Chat Service state from {self.path}: {exc}") from exc
 
@@ -289,6 +300,163 @@ class ChatStore:
                     break
             self.save()
         return normalize(action)
+
+    def create_agent_run(self, payload: Json) -> Json:
+        """Persist an agent run record."""
+
+        run = {
+            "_id": payload.get("_id") or new_id(),
+            "sessionId": payload["sessionId"],
+            "userId": payload["userId"],
+            "agentId": payload["agentId"],
+            "threadId": payload.get("threadId") or payload["sessionId"],
+            "status": payload.get("status", "running"),
+            "model": payload.get("model"),
+            "harness": payload.get("harness"),
+            "inputMessageId": payload.get("inputMessageId"),
+            "outputMessageId": payload.get("outputMessageId"),
+            "usage": clone(payload.get("usage") or {}),
+            "contextWindow": clone(payload.get("contextWindow") or {}),
+            "retry": clone(payload.get("retry") or {}),
+            "error": clone(payload.get("error") or {}),
+            "startedAt": payload.get("startedAt") or now_iso(),
+            "completedAt": payload.get("completedAt"),
+        }
+        if mongo.configured:
+            mongo.collection("agentRuns").insert_one(dict(run))
+        else:
+            self.state["agentRuns"].append(run)
+            self.save()
+        return normalize(run)
+
+    def complete_agent_run(self, run_id: str, status: str, payload: Json | None = None) -> Json | None:
+        """Mark an agent run completed, failed, or interrupted."""
+
+        update = {"status": status, "completedAt": now_iso(), **clone(payload or {})}
+        if mongo.configured:
+            mongo.collection("agentRuns").update_one({"_id": run_id}, {"$set": update})
+            doc = mongo.collection("agentRuns").find_one({"_id": run_id})
+            return normalize(doc) if doc else None
+        for item in self.state["agentRuns"]:
+            if item["_id"] == run_id:
+                item.update(update)
+                self.save()
+                return clone(item)
+        return None
+
+    def add_agent_tool_call(self, payload: Json) -> Json:
+        """Persist one agent tool call record."""
+
+        record = {
+            "_id": payload.get("_id") or new_id(),
+            "runId": payload["runId"],
+            "sessionId": payload["sessionId"],
+            "userId": payload["userId"],
+            "agentId": payload["agentId"],
+            "toolName": payload["toolName"],
+            "toolCallId": payload.get("toolCallId") or new_id(),
+            "input": clone(payload.get("input") or {}),
+            "outputSummary": clone(payload.get("outputSummary") or {}),
+            "status": payload.get("status", "success"),
+            "latencyMs": int(payload.get("latencyMs") or 0),
+            "attempts": int(payload.get("attempts") or 1),
+            "retryable": bool(payload.get("retryable", False)),
+            "requiresConfirmation": bool(payload.get("requiresConfirmation", False)),
+            "errorCode": payload.get("errorCode"),
+            "errorMessage": payload.get("errorMessage"),
+            "createdAt": payload.get("createdAt") or now_iso(),
+        }
+        if mongo.configured:
+            mongo.collection("agentToolCalls").insert_one(dict(record))
+        else:
+            self.state["agentToolCalls"].append(record)
+            self.save()
+        return normalize(record)
+
+    def add_memory(self, user_id: str, agent_id: str, memory_type: str, content: str, source_session_id: str, metadata: Json | None = None) -> Json:
+        """Persist a user-scoped long-term memory."""
+
+        memory = {
+            "_id": new_id(),
+            "userId": user_id,
+            "agentId": agent_id,
+            "type": memory_type,
+            "content": content,
+            "sourceSessionId": source_session_id,
+            "sourceMessageIds": clone((metadata or {}).get("sourceMessageIds") or []),
+            "confidence": float((metadata or {}).get("confidence") or 0.5),
+            "importance": int((metadata or {}).get("importance") or 1),
+            "status": "active",
+            "createdAt": now_iso(),
+            "updatedAt": now_iso(),
+        }
+        if mongo.configured:
+            mongo.collection("chatMemories").insert_one(dict(memory))
+        else:
+            self.state["chatMemories"].append(memory)
+            self.save()
+        return normalize(memory)
+
+    def list_memories(self, user_id: str, agent_id: str, limit: int = 10) -> list[Json]:
+        """Return active user-scoped memories."""
+
+        bounded_limit = min(max(limit, 1), 50)
+        if mongo.configured:
+            docs = list(
+                mongo.collection("chatMemories")
+                .find({"userId": user_id, "agentId": agent_id, "status": "active"})
+                .sort([("importance", -1), ("updatedAt", -1)])
+                .limit(bounded_limit)
+            )
+            return [normalize(doc) for doc in docs]
+        items = [
+            item
+            for item in self.state["chatMemories"]
+            if item["userId"] == user_id and item["agentId"] == agent_id and item.get("status") == "active"
+        ]
+        items.sort(key=lambda item: (item.get("importance") or 0, item.get("updatedAt") or ""), reverse=True)
+        return clone(items[:bounded_limit])
+
+    def add_episode(self, payload: Json) -> Json:
+        """Persist an episodic memory."""
+
+        episode = {
+            "_id": payload.get("_id") or new_id(),
+            "userId": payload["userId"],
+            "agentId": payload["agentId"],
+            "sessionId": payload["sessionId"],
+            "title": payload.get("title") or "Conversation episode",
+            "summary": payload.get("summary") or "",
+            "outcome": payload.get("outcome") or "",
+            "messageIds": clone(payload.get("messageIds") or []),
+            "toolCallIds": clone(payload.get("toolCallIds") or []),
+            "entities": clone(payload.get("entities") or {}),
+            "importance": int(payload.get("importance") or 1),
+            "createdAt": payload.get("createdAt") or now_iso(),
+            "updatedAt": payload.get("updatedAt") or now_iso(),
+        }
+        if mongo.configured:
+            mongo.collection("chatEpisodes").insert_one(dict(episode))
+        else:
+            self.state["chatEpisodes"].append(episode)
+            self.save()
+        return normalize(episode)
+
+    def list_episodes(self, user_id: str, agent_id: str, limit: int = 10) -> list[Json]:
+        """Return user-scoped episodic memories."""
+
+        bounded_limit = min(max(limit, 1), 50)
+        if mongo.configured:
+            docs = list(
+                mongo.collection("chatEpisodes")
+                .find({"userId": user_id, "agentId": agent_id})
+                .sort([("importance", -1), ("updatedAt", -1)])
+                .limit(bounded_limit)
+            )
+            return [normalize(doc) for doc in docs]
+        items = [item for item in self.state["chatEpisodes"] if item["userId"] == user_id and item["agentId"] == agent_id]
+        items.sort(key=lambda item: (item.get("importance") or 0, item.get("updatedAt") or ""), reverse=True)
+        return clone(items[:bounded_limit])
 
 
 store = ChatStore(settings)

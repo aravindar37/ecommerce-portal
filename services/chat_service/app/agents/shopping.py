@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.agents.audit import audit_tool_call
+from app.agentic.service import agent_service
 from app.dependencies import ChatContext
 from app.http import ServiceHttpError
 from app.llm.client import llm_client
@@ -80,6 +81,22 @@ class ShoppingAgent:
             compact(request_context),
         )
         store.add_message(session_id, "user", message, {"context": request_context})
+        agentic = agent_service.try_answer(context, session, message, request_context)
+        if agentic.message and agentic.used_agentic_loop:
+            metadata: Json = {
+                "usedAgenticLoop": agentic.used_agentic_loop,
+                "usedDeepAgents": agentic.used_deepagents,
+                "runId": agentic.run_id,
+                "contextWindow": agentic.context_window,
+            }
+            if agentic.pending_action:
+                metadata["pendingActionId"] = agentic.pending_action.get("id")
+                metadata["pendingActionType"] = agentic.pending_action.get("type")
+                metadata["pendingActionExpiresAt"] = agentic.pending_action.get("expiresAt")
+            if agentic.suggested_products:
+                metadata["suggestedProducts"] = agentic.suggested_products
+            store.add_message(session_id, "assistant", agentic.message, metadata)
+            return agentic.to_public_dict()
         current_product_id = request_context.get("currentProductId") or session["context"].get("productId")
         lowered = message.lower()
         if "compare" in lowered:
@@ -212,7 +229,7 @@ class ShoppingAgent:
             session_id,
             context.user["_id"],
             "add_to_cart",
-            {"productId": product["_id"], "quantity": 1, "size": "M"},
+            {"productId": product["_id"], "quantity": 1, "size": None},
         )
         core_tools.write_activity(
             "assistant_product_recommended",
@@ -235,7 +252,13 @@ class ShoppingAgent:
             session_id,
             "assistant",
             reply,
-            {"pendingActionId": action["_id"], "suggestedProducts": suggested_products, "llmMetadataStored": True},
+            {
+                "pendingActionId": action["_id"],
+                "pendingActionType": action["type"],
+                "pendingActionExpiresAt": action["expiresAt"],
+                "suggestedProducts": suggested_products,
+                "llmMetadataStored": True,
+            },
         )
         audit_tool_call(
             session_id,

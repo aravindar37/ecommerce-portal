@@ -6,6 +6,7 @@ from fastapi import APIRouter, Query, Request, status
 
 from app.agents.shopping import shopping_agent
 from app.agents.support import support_agent
+from app.agentic.service import agent_service
 from app.api.envelope import fail, ok
 from app.config import settings
 from app.database import mongo
@@ -28,6 +29,7 @@ def health() -> dict[str, object]:
             "service": "chat",
             "backend": {"runtime": "python", "framework": "fastapi"},
             "llm": llm_client.metadata(),
+            "agent": agent_service.metadata(),
             "mcp": mcp,
             "database": mongo.health(),
             "ready": bool(mcp["enabled"] and mcp["ready"]),
@@ -178,8 +180,4 @@ def confirm_action(payload: ConfirmActionRequest, request: Request) -> dict[str,
         )
         if action["payload"]["requiresDetails"]:
             fail(400, "RETURN_DETAILS_REQUIRED", "Reason, item condition, and preferred resolution are required.")
-    if action["type"] == "add_to_cart":
-        return ok(shopping_agent.confirm_action(context, action))
-    if action["type"] == "create_return_request":
-        return ok(support_agent.confirm_action(context, action))
-    fail(400, "UNSUPPORTED_ACTION", "Assistant action type is not supported.")
+    return ok(agent_service.confirm_action(context, action))

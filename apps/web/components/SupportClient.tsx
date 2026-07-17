@@ -24,6 +24,7 @@ export function SupportClient() {
   const [feed, setFeed] = useState<FeedEntry[]>([]);
   const [reason, setReason] = useState("");
   const [condition, setCondition] = useState("Unused");
+  const [resolution, setResolution] = useState("refund");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const scrollAnchor = useRef<HTMLDivElement>(null);
@@ -81,7 +82,11 @@ export function SupportClient() {
         role: item.role,
         text: safeText(item.content),
         pendingAction: item.metadata?.pendingActionId
-          ? { id: item.metadata.pendingActionId, type: "create_return_request", expiresAt: "" }
+          ? {
+              id: item.metadata.pendingActionId,
+              type: item.metadata.pendingActionType ?? "create_return_request",
+              expiresAt: item.metadata.pendingActionExpiresAt ?? "",
+            }
           : undefined,
       }))
     );
@@ -108,6 +113,7 @@ export function SupportClient() {
     setFeed([]);
     setReason("");
     setCondition("Unused");
+    setResolution("refund");
     setError("");
   }
 
@@ -149,7 +155,7 @@ export function SupportClient() {
     try {
       const result = await apiFetch<{ result?: { returnNumber?: string } }>("/api/chat/assistant/actions/confirm", {
         method: "POST",
-        body: JSON.stringify({ actionId: action.id, confirm: true, reason, condition, resolution: "refund" })
+        body: JSON.stringify({ actionId: action.id, confirm: true, reason, condition, resolution })
       });
       const returnNumber = result.result?.returnNumber ?? "Return requested";
       setFeed((prev) => [
@@ -215,9 +221,11 @@ export function SupportClient() {
                     item={selectedItem}
                     reason={reason}
                     condition={condition}
+                    resolution={resolution}
                     busy={busy}
                     onReasonChange={setReason}
                     onConditionChange={setCondition}
+                    onResolutionChange={setResolution}
                     onConfirm={(action) => void confirm(action)}
                   />
                 ) : (
@@ -259,18 +267,22 @@ function ReturnActionCard({
   item,
   reason,
   condition,
+  resolution,
   busy,
   onReasonChange,
   onConditionChange,
+  onResolutionChange,
   onConfirm,
 }: {
   action: PendingAction;
   item?: OrderItem;
   reason: string;
   condition: string;
+  resolution: string;
   busy: boolean;
   onReasonChange: (value: string) => void;
   onConditionChange: (value: string) => void;
+  onResolutionChange: (value: string) => void;
   onConfirm: (action: PendingAction) => void;
 }) {
   return (
@@ -284,6 +296,13 @@ function ReturnActionCard({
           <option>Unused</option>
           <option>Opened</option>
           <option>Damaged</option>
+        </select>
+      </label>
+      <label>
+        Resolution
+        <select aria-label="Resolution" value={resolution} onChange={(event) => onResolutionChange(event.target.value)}>
+          <option value="refund">Refund</option>
+          <option value="exchange">Exchange</option>
         </select>
       </label>
       <button type="button" onClick={() => onConfirm(action)} disabled={busy || !reason.trim()}>

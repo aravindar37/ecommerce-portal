@@ -57,7 +57,7 @@ Install or have available:
 
 - Python 3.11 or newer.
 - Node.js and npm for the Next.js frontend.
-- MongoDB Atlas cluster with your MacBook IP allowed in Network Access.
+- MongoDB Atlas cluster with your Service IPs allowed in Network Access.
 - Ollama running locally for default embeddings.
 - `nomic-embed-text:v1.5` pulled in Ollama.
 - OpenAI-compatible LLM credentials if you want live assistant LLM calls. Without a key, local deterministic assistant behavior is still used for demo/test flows.
@@ -185,51 +185,8 @@ If npm fails with `ECONNRESET`, retry when registry/network access is available.
 
 ## Dataset
 
-The demo uses the [Kaggle Fashion Product Images Dataset](https://www.kaggle.com/datasets/paramaggarwal/fashion-product-images-dataset) (44,446 fashion products with images, metadata, and style attributes).
-
-### Downloading the Dataset
-
-**Install the Kaggle CLI** (if not already installed):
-
-```bash
-pip install kaggle
-```
-
-**Set up Kaggle API credentials:**
-
-1. Log in to [kaggle.com](https://www.kaggle.com) → Account → API → **Create New Token**.
-2. Save the downloaded `kaggle.json` to `~/.kaggle/kaggle.json`.
-3. Restrict permissions:
-
-```bash
-chmod 600 ~/.kaggle/kaggle.json
-```
-
-**Download and extract:**
-
-```bash
-# Download the dataset zip (approx 572 MB compressed)
-kaggle datasets download paramaggarwal/fashion-product-images-dataset
-
-# Extract into ./dataset at the repo root
-unzip fashion-product-images-dataset.zip -d dataset
-```
-
-The zip extracts a nested directory. Move the contents so the structure matches:
-
-```bash
-# If the zip created dataset/fashion-product-images-dataset/...
-mv dataset/fashion-product-images-dataset/* dataset/
-rmdir dataset/fashion-product-images-dataset
-```
-
-**Alternative (manual download):**
-
-Visit [https://www.kaggle.com/datasets/paramaggarwal/fashion-product-images-dataset](https://www.kaggle.com/datasets/paramaggarwal/fashion-product-images-dataset), click **Download**, extract the zip, and place the contents at `./dataset/`.
-
-### Expected Layout
-
 The local Kaggle product dataset is expected at `./dataset`.
+Kaggle dataset used is https://www.kaggle.com/datasets/paramaggarwal/fashion-product-images-dataset
 
 Expected contents:
 
@@ -288,15 +245,7 @@ After the smoke test passes, rerun the three commands without `--limit` for the 
 
 ## Start The Application
 
-Fast path from the repo root:
-
-```bash
-./scripts/start_all.sh
-```
-
-The script loads `.env`, starts Core, Search, Chat, and the Next.js frontend, writes logs to `artifacts/logs/`, and writes PIDs to `artifacts/pids/`. If a service is already healthy on its configured port, the script reuses it. Press Ctrl-C to stop only the processes started by this script.
-
-Manual startup is also available. Open four terminal windows from the repo root. In each terminal, load `.env` first:
+Open four terminal windows from the repo root. In each terminal, load `.env` first:
 
 ```bash
 set -a

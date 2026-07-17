@@ -138,6 +138,11 @@ export interface ChatMessage {
   metadata?: {
     suggestedProducts?: Product[];
     pendingActionId?: string;
+    pendingActionType?: string;
+    pendingActionExpiresAt?: string;
+    usedAgenticLoop?: boolean;
+    usedDeepAgents?: boolean;
+    runId?: string;
     context?: Record<string, unknown>;
   };
   createdAt: string;
@@ -171,4 +176,9 @@ export interface AssistantReply {
   suggestedProducts?: Product[];
   pendingAction?: PendingAction;
   usedMcp?: boolean;
+  comparison?: Record<string, (string | number | null)[]>;
+  eligibility?: Record<string, unknown>;
+  usedAgenticLoop?: boolean;
+  usedDeepAgents?: boolean;
+  agentFallbackReason?: string;
 }

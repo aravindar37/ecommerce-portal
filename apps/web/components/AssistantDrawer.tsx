@@ -15,6 +15,7 @@ interface FeedEntry {
   text: string;
   products: Product[];
   pendingActionId?: string;
+  pendingActionType?: string;
 }
 
 const STORAGE_KEY = "styleSenseShoppingSessionId";
@@ -83,6 +84,7 @@ export function AssistantDrawer({ open, onClose }: AssistantDrawerProps) {
           text: msg.content,
           products: msg.metadata?.suggestedProducts ?? [],
           pendingActionId: msg.metadata?.pendingActionId,
+          pendingActionType: msg.metadata?.pendingActionType,
         }));
         setFeed(entries);
         setHistoryLoaded(true);
@@ -128,6 +130,7 @@ export function AssistantDrawer({ open, onClose }: AssistantDrawerProps) {
         text: msg.content,
         products: msg.metadata?.suggestedProducts ?? [],
         pendingActionId: msg.metadata?.pendingActionId,
+        pendingActionType: msg.metadata?.pendingActionType,
       }));
       setFeed(entries);
       const latestPending = [...entries].reverse().find((entry) => entry.pendingActionId);
@@ -204,6 +207,7 @@ export function AssistantDrawer({ open, onClose }: AssistantDrawerProps) {
         text: reply.message,
         products: reply.suggestedProducts ?? [],
         pendingActionId: reply.pendingAction?.id,
+        pendingActionType: reply.pendingAction?.type,
       };
       setFeed((prev) => [...prev, assistantEntry]);
       setPendingActionId(reply.pendingAction?.id ?? "");
@@ -220,14 +224,15 @@ export function AssistantDrawer({ open, onClose }: AssistantDrawerProps) {
     if (!pendingActionId) return;
     setError("");
     setBusy(true);
-    const product = feed.flatMap((entry) => entry.products).find((entry) => entry._id);
+    const matchingEntry = feed.find((entry) => entry.pendingActionId === pendingActionId);
+    const product = matchingEntry?.products[0];
     try {
       const result = await apiFetch<{ status: string }>("/api/chat/assistant/actions/confirm", {
         method: "POST",
         body: JSON.stringify({ actionId: pendingActionId, confirm: true })
       });
       setFeed((prev) => [
-        ...prev.map((entry) => entry.pendingActionId === pendingActionId ? { ...entry, pendingActionId: undefined } : entry),
+        ...prev.map((entry) => entry.pendingActionId === pendingActionId ? { ...entry, pendingActionId: undefined, pendingActionType: undefined } : entry),
         {
           id: crypto.randomUUID(),
           role: "assistant",
@@ -238,6 +243,30 @@ export function AssistantDrawer({ open, onClose }: AssistantDrawerProps) {
       setPendingActionId("");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Unable to complete assistant action");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cancel(): Promise<void> {
+    if (!pendingActionId) return;
+    setError("");
+    setBusy(true);
+    try {
+      await apiFetch<{ status: string }>("/api/chat/assistant/actions/confirm", {
+        method: "POST",
+        body: JSON.stringify({ actionId: pendingActionId, confirm: false }),
+      });
+      setFeed((prev) =>
+        prev.map((e) =>
+          e.pendingActionId === pendingActionId
+            ? { ...e, pendingActionId: undefined, pendingActionType: undefined }
+            : e
+        )
+      );
+      setPendingActionId("");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Unable to cancel assistant action");
     } finally {
       setBusy(false);
     }
@@ -335,10 +364,18 @@ export function AssistantDrawer({ open, onClose }: AssistantDrawerProps) {
             ))}
             {entry.pendingActionId ? (
               <div className="assistant-action-card">
-                <strong>Add to cart</strong>
+                <strong>
+                  {entry.pendingActionType === "add_to_cart" ? "Add to cart"
+                    : entry.pendingActionType === "create_return_request" ? "Create return request"
+                    : entry.pendingActionType === "create_support_ticket" ? "Create support ticket"
+                    : "Confirm action"}
+                </strong>
                 <span className="meta">{entry.products[0]?.title ?? "Selected product"}</span>
-                <button type="button" aria-label="Confirm add to cart" onClick={() => void confirm()} disabled={busy}>
+                <button type="button" aria-label="Confirm action" onClick={() => void confirm()} disabled={busy}>
                   Confirm
+                </button>
+                <button type="button" aria-label="Cancel action" className="secondary" onClick={() => void cancel()} disabled={busy}>
+                  Cancel
                 </button>
               </div>
             ) : null}

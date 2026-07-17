@@ -1,204 +1,256 @@
 # Chat Service
 
-FastAPI service for the Codex Shopping Assistant and Returns/Support Agent. Chat Service owns chat sessions, messages, pending assistant actions, LLM routing, mandatory local Codex MCP integration, ecommerce-safe tool orchestration, and agent audit logging.
+FastAPI service for StyleSense shopping and returns/support assistants. Chat Service owns authenticated chat sessions, assistant messages, pending human confirmations, Deep Agents-oriented orchestration, ecommerce-safe tool wrappers, token-aware context assembly, transient retry handling, memory/run records, LLM provider routing, local Codex MCP readiness metadata, and agent audit logging.
 
 ---
 
-## Architecture Overview
+## Current Architecture
 
-```
+```text
 Browser / Next.js (port 3000)
         │  cookie forwarding (core_session)
         ▼
   Chat Service (port 4002)
-  ┌──────────────────────────────────────────────────────┐
-  │  FastAPI + auth middleware                           │
-  │                                                      │
-  │  ┌────────────────┐   ┌──────────────────────────┐  │
-  │  │ ShoppingAgent  │   │   SupportAgent           │  │
-  │  │ (keyword-      │   │ (MCP-assisted returns)   │  │
-  │  │  routed)       │   └────────────┬─────────────┘  │
-  │  └───────┬────────┘                │                 │
-  │          │                         │                 │
-  │  ┌───────▼─────────────────────────▼─────────────┐  │
-  │  │  Tool Layer (Python callables)                 │  │
-  │  │  SearchTools  │  CoreTools                     │  │
-  │  └───────┬──────────────────┬─────────────────────┘  │
-  │          │                  │                        │
-  │  ┌───────▼──────┐  ┌────────▼────────┐              │
-  │  │  LlmClient   │  │  McpClient      │              │
-  │  │  (text only) │  │  (Codex facade) │              │
-  │  └──────────────┘  └─────────────────┘              │
-  │                                                      │
-  │  ┌──────────────────────────────────────────────┐   │
-  │  │  ChatStore                                   │   │
-  │  │  file: artifacts/chat_service/state.json     │   │
-  │  │  (MongoDB Atlas when MONGODB_URI configured) │   │
-  │  └──────────────────────────────────────────────┘   │
-  └──────────────────────────────────────────────────────┘
-        │                         │
-        ▼                         ▼
-  Search Service (4001)    Core Service (4000)
-  hybrid search            cart, orders, returns,
-  product facts            auth, support tickets
+  ┌───────────────────────────────────────────────────────────┐
+  │ FastAPI routes + Core session validation                  │
+  │                                                           │
+  │ AgentService                                             │
+  │   ├─ DeepAgentsHarness                                   │
+  │   │   ├─ token-budgeted context                          │
+  │   │   ├─ retry policy / safe failure handling             │
+  │   │   ├─ ecommerce tools as LangChain StructuredTool      │
+  │   │   ├─ HITL confirmation tool policy                    │
+  │   │   └─ memory + episodic retrieval                      │
+  │   └─ deterministic fallback agents                        │
+  │                                                           │
+  │ Tool Layer                                                │
+  │   ├─ SearchTools -> Search Service                        │
+  │   └─ CoreTools   -> Core Service                          │
+  │                                                           │
+  │ ChatStore                                                 │
+  │   ├─ chatSessions / chatMessages / pendingActions         │
+  │   ├─ agentRuns / agentToolCalls / agentInterrupts         │
+  │   └─ chatMemories / chatEpisodes                          │
+  └───────────────────────────────────────────────────────────┘
+        │                                  │
+        ▼                                  ▼
+  Search Service (4001)             Core Service (4000)
+  product search/facts              auth, cart, orders,
+                                    returns, support, audit
+```
+
+The production target is `deepagents.create_deep_agent` with ecommerce-only tools. The current implementation attempts the Deep Agents path first when dependencies and `LLM_API_KEY` are available, then safely falls back to the existing deterministic assistant behavior when the live agent runtime is unavailable. Fallback responses do not claim Deep Agents or MCP execution.
+
+---
+
+## Features
+
+- Authenticated shopping and support chat sessions.
+- Deep Agents-oriented harness wrapper with `AGENT_HARNESS=deepagents`.
+- Ecommerce tool wrappers for product search, product detail, similar products, matching, comparison, cart reads, user preferences, orders, return eligibility, return policy, and confirmation-producing mutation proposals.
+- Human-in-the-loop pending actions for cart additions, return requests, and support tickets.
+- Token-aware context assembly:
+  - keeps recent messages,
+  - uses session summaries,
+  - retrieves scoped memories/episodes,
+  - prunes older low-relevance records,
+  - caps large tool results before sending them back to the model.
+- Transient retry policy:
+  - retries read-only/idempotent model/tool/downstream failures,
+  - classifies non-retriable auth/validation/ownership/policy errors,
+  - avoids blind retries for mutating operations,
+  - records retry metadata in run/tool records.
+- MongoDB Atlas persistence with file-backed local fallback.
+- Agent run, tool call, memory, and episode records.
+- Local Codex MCP readiness metadata retained for demo compatibility.
+
+---
+
+## Runtime Behavior
+
+### Message Flow
+
+```text
+POST /api/assistant/{shopping|support}/messages
+  -> validate Core session
+  -> persist user message
+  -> build AgentRunContext
+  -> retrieve summary, recent messages, memories, and episodes
+  -> assemble token-budgeted context
+  -> try Deep Agents run
+      -> LLM selects ecommerce tools
+      -> tool executor validates args and applies retry policy
+      -> confirmation tools create pending actions instead of Core writes
+      -> final assistant text is normalized
+  -> if Deep Agents cannot run, use deterministic fallback
+  -> persist assistant message, run metadata, tool/audit metadata
+```
+
+### Fallback Rules
+
+Deep Agents is skipped when:
+
+- `AGENTIC_ENABLED=false`.
+- `deepagents` / LangChain packages are not installed.
+- `LLM_API_KEY` is empty or placeholder-like.
+- the Deep Agents invocation fails.
+
+In those cases, the service continues using the previous deterministic shopping/support flows so local demos and tests still work. The fallback is explicit in run metadata via `fallbackReason`, and public responses include `usedDeepAgents: false` only when the Deep Agents path actually returns a message.
+
+### Human Confirmation
+
+Mutation proposals create `pendingActions` first:
+
+```text
+Agent/tool proposes mutation
+    │
+    ▼
+pendingActions record created
+    │
+    ▼
+Frontend shows confirm/cancel
+    │
+    ▼
+POST /api/assistant/actions/confirm
+    │
+    ▼
+Core mutation executes only after confirmation
+```
+
+Supported confirmed actions:
+
+- `add_to_cart`
+- `create_return_request`
+- `create_support_ticket`
+
+---
+
+## Prerequisites
+
+- Python 3.11 or newer.
+- Core Service running on `CORE_SERVICE_BASE_URL`.
+- Search Service running on `SEARCH_SERVICE_BASE_URL`.
+- MongoDB Atlas URI if durable persistence is desired.
+- OpenAI-compatible LLM credentials for live Deep Agents execution.
+- Chat Service Python dependencies installed with:
+
+```bash
+python3 -m pip install -e services/chat_service
+```
+
+This installs `deepagents`, `langchain`, `langgraph`, and `langchain-openai` in addition to FastAPI and MongoDB dependencies.
+
+Quick dependency check:
+
+```bash
+PYTHONPATH=services/chat_service python3 - <<'PY'
+from app.agentic.service import agent_service
+print(agent_service.metadata())
+PY
 ```
 
 ---
 
-## Current Implementation: Deterministic-Routed Agents
+## Configuration
 
-The current implementation uses **deterministic Python routing** to dispatch each user turn to the right tool call. The LLM is used only as a **text formatter** — it receives tool results and produces natural-language output, but it does not select or invoke tools. Ecommerce mutations (cart changes, return creation) are always gated behind explicit user confirmation.
+Core service access:
 
-`app/tools/registry.py` defines OpenAI-compatible function specs (`SHOPPING_TOOLS`, `SUPPORT_TOOLS`) that describe all agent capabilities. These schemas are not yet wired to the LLM as function-calling tools; they are prepared for that integration in a future iteration.
-
-### ShoppingAgent (`app/agents/shopping.py`)
-
-Handles product discovery, recommendations, outfit pairing, comparison, and cart add proposals.
-
-Routing per user turn (deterministic keyword matching):
-
-| Message signal | Dispatch |
-|---|---|
-| Contains `"compare"` | `compare_from_context()` — fetches two products side-by-side |
-| On product page + `"match"/"pair"/"outfit"` | `matching_products()` — outfit complementing via `find_matching_products` |
-| On product page (other questions) | `answer_product_question()` — product facts from Search |
-| Everything else | `recommend_with_cart_action()` — hybrid search + pending add-to-cart |
-
-Detailed flow for `recommend_with_cart_action()`:
-
-1. Extracts structured filters from message text (colour, usage, season, price cap, article type) via `filters_from_message()`.
-2. Calls `SearchTools.search_products()` → Search `/api/search/hybrid`.
-3. Relaxes filters and retries if first search returns empty.
-4. Optionally calls `CoreTools.get_cart()` to exclude items already in cart when `cartAware: true`.
-5. Creates a `pending add_to_cart` action — never mutates cart directly.
-6. Calls `LlmClient.chat_completion()` with recent session history for response wording; falls back to a deterministic string if LLM is unavailable.
-7. Persists the assistant message + `suggestedProducts` snapshot + `pendingActionId` to `chatMessages`.
-
-### SupportAgent (`app/agents/support.py`)
-
-Handles return eligibility checks, MCP-assisted return planning, and confirmed return creation.
-
-Flow per user turn:
-
-1. Loads prior session turns from `chatMessages`.
-2. Uses explicit `orderId`/`orderItemId` from the request context if provided (e.g., user clicked an order).
-3. If IDs are missing, calls `infer_order_context()` which calls `CoreTools.list_user_orders()` and infers the relevant order by matching order number or item title keywords in the user's message, defaulting to the most recent order.
-4. Calls `McpClient.plan_support_return()` — returns live MCP plan when `CODEX_MCP_TRANSPORT=http` and endpoint is reachable; otherwise returns a static ecommerce-safe plan.
-5. Calls `CoreTools.get_order()`, `CoreTools.check_return_eligibility()`, and `CoreTools.get_return_policy()`.
-6. If ineligible: calls LLM to compose a clear ineligibility explanation.
-7. If eligible: creates a `pending create_return_request` action and waits for user confirmation.
-8. Calls `LlmClient.chat_completion()` for response wording with deterministic fallback.
-
-### Tool Layer
-
-The tool layer is plain Python — each method makes a synchronous HTTP call to Search or Core. Tool functions are invoked directly by the agents, not via LLM function calling.
-
-**SearchTools** (`app/tools/search.py`):
-
-| Method | Search endpoint | Called by |
+| Variable | Default | Description |
 |---|---|---|
-| `search_products()` | `POST /api/search/hybrid` | ShoppingAgent recommend, filter retry |
-| `get_product()` | `GET /api/products/{id}` | ShoppingAgent product question, matching reference fetch |
-| `get_similar_products()` | `GET /api/products/{id}/similar` | Defined, not yet agent-dispatched |
-| `find_matching_products()` | Calls `get_product` + `search_products` | ShoppingAgent outfit matching |
-| `compare_products()` | Multiple `get_product` calls | ShoppingAgent compare |
+| `CORE_SERVICE_BASE_URL` | `http://localhost:4000` | Core Service for auth, cart, orders, returns, support |
+| `SEARCH_SERVICE_BASE_URL` | `http://localhost:4001` | Search Service for products |
+| `CHAT_SERVICE_INTERNAL_TOKEN` | `` | Internal credential for audit-log writes to Core |
+| `SEARCH_SERVICE_INTERNAL_TOKEN` | `` | Token sent by Chat when calling Search |
 
-**CoreTools** (`app/tools/core.py`):
+Persistence:
 
-| Method | Core endpoint | Called by |
+| Variable | Default | Description |
 |---|---|---|
-| `get_cart()` | `GET /api/cart` | ShoppingAgent when `cartAware: true` |
-| `add_to_cart()` | `POST /api/cart/items` | ShoppingAgent on confirm |
-| `update_cart_item()` | `PATCH /api/cart/items/{id}` | Defined, not yet agent-dispatched |
-| `remove_from_cart()` | `DELETE /api/cart/items/{id}` | Defined, not yet agent-dispatched |
-| `list_user_orders()` | `GET /api/orders` | SupportAgent `infer_order_context` |
-| `get_order()` | `GET /api/orders/{id}` | SupportAgent eligibility check |
-| `check_return_eligibility()` | `POST /api/returns/check-eligibility` | SupportAgent |
-| `create_return_request()` | `POST /api/returns` | SupportAgent on confirm |
-| `get_return_policy()` | Local constant | SupportAgent |
-| `create_support_ticket()` | `POST /api/support/tickets` | Defined, not yet agent-dispatched |
-| `get_user_preferences()` | `GET /api/me` | Defined, not yet agent-dispatched |
-| `save_user_preference()` | `PATCH /api/me/preferences` | Defined, not yet agent-dispatched |
-| `write_activity()` | `POST /api/activity-events` | ShoppingAgent after recommendation |
-| `write_audit_log()` | `POST /api/internal/agent-audit-logs` | `audit_tool_call()` helper |
+| `MONGODB_URI` | `` | Enables MongoDB Atlas persistence when set |
+| `MONGODB_DB` | `ecommerce_demo` | Atlas database name |
+| `CHAT_SERVICE_DATA_PATH` | `./artifacts/chat_service/state.json` | File-backed fallback path |
 
-### LLM Client (`app/llm/client.py`)
+LLM provider:
 
-- OpenAI-compatible Chat Completions adapter.
-- Configurable provider, model, base URL, API key, temperature, max tokens, timeout.
-- Called only for **response wording** — receives `messages` (system prompt + session history + tool result), returns a text string. Does not use `tools` / function-calling at this time.
-- When `LLM_API_KEY` is absent or a placeholder: raises `ServiceHttpError(503)` — agents catch this and use a deterministic fallback string.
+| Variable | Default | Description |
+|---|---|---|
+| `LLM_PROVIDER` | `openai` | Provider label |
+| `LLM_MODEL` | `gpt-5.4` | Model/deployment identifier |
+| `LLM_API_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible base URL |
+| `LLM_CHAT_COMPLETIONS_PATH` | `/chat/completions` | Legacy chat-completions path used by fallback client |
+| `LLM_API_KEY` | `` | Required for live LLM and Deep Agents calls |
+| `LLM_TIMEOUT_MS` | `60000` | LLM timeout |
+| `LLM_MAX_OUTPUT_TOKENS` | `1200` | Output budget |
+| `LLM_TEMPERATURE` | `0.3` | Sampling temperature |
+| `LLM_STREAMING_ENABLED` | `true` | Streaming flag for legacy LLM client |
 
-### MCP Client (`app/mcp/client.py`)
+Agent runtime:
 
-- `readiness()` checks the configured command (`stdio`) or HTTP endpoint and reports MCP readiness in the health response.
-- `plan_support_return()` returns a support return workflow plan:
-  - `CODEX_MCP_TRANSPORT=http` and endpoint reachable: calls `POST {CODEX_MCP_URL}/tools/execute` with `planReturnWorkflow`.
-  - All other cases: returns the static ecommerce-safe plan (`getOrder → checkReturnEligibility → createReturnRequest`).
-- Live MCP transport is wired but the `stdio` command form does not execute actual tool calls at runtime; the static plan is deterministic and sufficient for the demo.
+| Variable | Default | Description |
+|---|---|---|
+| `AGENT_HARNESS` | `deepagents` | Production harness selector |
+| `AGENTIC_ENABLED` | `true` | Enables Deep Agents attempt before fallback |
+| `AGENT_MAX_MODEL_CALLS_PER_RUN` | `8` | Intended model-call limit per run |
+| `AGENT_MAX_TOOL_CALLS_PER_RUN` | `12` | Intended tool-call limit per run |
+| `AGENT_TOOL_TIMEOUT_MS` | `15000` | Tool timeout budget |
+| `AGENT_STREAMING_ENABLED` | `true` | Future streaming toggle |
+| `AGENT_MEMORY_ENABLED` | `true` | Enables memory retrieval/write hooks |
+| `AGENT_EPISODIC_MEMORY_ENABLED` | `true` | Enables episode retrieval/write hooks |
+| `AGENT_HITL_ENABLED` | `true` | Enables interrupt/confirmation policy |
+| `AGENT_DEEPAGENTS_ENABLE_SUBAGENTS` | `true` | Enables configured subagent specs |
+| `AGENT_DEEPAGENTS_MEMORY_PATHS` | `/memories/preferences.md,/memories/episodes.md` | Deep Agents memory paths |
+| `AGENT_DEEPAGENTS_FILESYSTEM_POLICY` | `deny` | Documentation/runtime policy for filesystem access |
 
-### Pending Action Gate
+Retry policy:
 
-Cart mutations and return creation always go through a confirmation gate:
+| Variable | Default | Description |
+|---|---|---|
+| `AGENT_RETRY_MAX_ATTEMPTS` | `3` | Max attempts for retry-safe operations |
+| `AGENT_RETRY_BASE_DELAY_MS` | `250` | Initial backoff |
+| `AGENT_RETRY_MAX_DELAY_MS` | `3000` | Backoff cap |
+| `AGENT_RETRY_JITTER_ENABLED` | `true` | Adds jitter to agent retry helper |
+| `AGENT_RETRYABLE_STATUS_CODES` | `408,409,425,429,500,502,503,504` | HTTP statuses treated as transient |
 
-```
-Agent creates pending action (status=pending, TTL=900s)
-    │
-    ▼
-Frontend shows confirm/cancel button
-    │
-    ▼
-POST /api/assistant/actions/confirm  {actionId, confirmed: true}
-    │
-    ▼
-Agent executes Core mutation, marks action completed
-```
+Context-window policy:
 
-Confirmed actions execute `CoreTools.add_to_cart()` or `CoreTools.create_return_request()` and write an audit log entry.
+| Variable | Default | Description |
+|---|---|---|
+| `AGENT_CONTEXT_MAX_INPUT_TOKENS` | `24000` | Hard estimated input cap |
+| `AGENT_CONTEXT_TARGET_INPUT_TOKENS` | `18000` | Target context size before invoking model |
+| `AGENT_CONTEXT_RECENT_MESSAGE_LIMIT` | `12` | Recent raw messages preserved first |
+| `AGENT_CONTEXT_RELEVANCE_TOP_K` | `8` | Relevant older messages/memories/episodes |
+| `AGENT_CONTEXT_SUMMARY_MAX_TOKENS` | `1200` | Summary token cap |
+| `AGENT_CONTEXT_TOOL_RESULT_MAX_TOKENS` | `1600` | Tool-result compaction cap |
 
-### Persistence (ChatStore — `app/store.py`)
+Codex MCP compatibility metadata:
 
-- MongoDB Atlas is the source of truth when `MONGODB_URI` is configured.
-- File-backed fallback at `artifacts/chat_service/state.json` for local dev without Atlas.
-- `chatSessions`: `type`, `userId`, `context`, `status`, `summary`, `messageCount`, `createdAt`, `updatedAt`.
-- `chatMessages`: `sessionId`, `role`, `content`, `metadata` (includes `suggestedProducts`, `pendingActionId`), `createdAt`.
-- `pendingActions`: `sessionId`, `userId`, `type`, `payload`, `status`, `expiresAt`, `createdAt`, `updatedAt`.
-
-### Auth
-
-- Every protected endpoint calls `CoreTools.get_me` via `require_user_context(request)`.
-- The Core session cookie is forwarded on all downstream Core/Search calls.
-- No JWT tokens; all auth is cookie-based.
+| Variable | Default | Description |
+|---|---|---|
+| `CODEX_MCP_ENABLED` | `true` | Enables MCP readiness metadata |
+| `CODEX_MCP_TRANSPORT` | `stdio` | `stdio` or `http` |
+| `CODEX_MCP_COMMAND` | `codex` | Command for stdio readiness check |
+| `CODEX_MCP_ARGS` | `mcp,serve` | Command args |
+| `CODEX_MCP_URL` | `http://localhost:9000/mcp` | HTTP MCP URL |
+| `CODEX_MCP_TIMEOUT_MS` | `120000` | MCP timeout |
 
 ---
 
-## Planned: LLM Tool-Calling Architecture
+## Persistence
 
-The tool registry (`app/tools/registry.py`) is structured to enable full LLM-driven tool orchestration in a future iteration. When this is wired:
+`ChatStore` uses MongoDB Atlas when `MONGODB_URI` is configured and file-backed JSON otherwise.
 
-```
-User message
-    │
-    ▼
-LLM receives: system prompt + session history + SHOPPING_TOOLS/SUPPORT_TOOLS
-    │
-    ▼
-LLM returns tool_calls (e.g. search_products, find_matching_products, compare_products)
-    │
-    ▼
-Python executes the selected tool functions
-    │
-    ▼
-Tool results appended to messages, LLM produces final response
-    │
-    ▼ (repeat until no more tool_calls)
-Confirm mutation (add to cart / create return)
-    │
-    ▼
-Final response + suggestedProducts + pendingAction
-```
+Collections/state keys:
 
-This would replace the current deterministic keyword-based dispatch, allowing the LLM to decide which tools to call and in what order based on the user's intent.
+- `chatSessions`: session owner, type, context, title/summary, status, message count.
+- `chatMessages`: user/assistant content and metadata.
+- `pendingActions`: confirmation-gated mutations.
+- `agentRuns`: Deep Agents/fallback run records, context-window metadata, retry metadata, usage, errors.
+- `agentToolCalls`: tool name, redacted inputs, compact outputs, attempts, retryability, latency, confirmation flags.
+- `agentInterrupts`: future graph interrupt records.
+- `chatMemories`: user-scoped long-term memories.
+- `chatEpisodes`: episodic records with outcomes and related entities.
+
+Mongo indexes for the agent/memory collections are created in `mongo.ensure_indexes()`.
 
 ---
 
@@ -206,68 +258,18 @@ This would replace the current deterministic keyword-based dispatch, allowing th
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/health` | Service readiness with LLM + MCP metadata |
+| `GET` | `/api/health` | Readiness with backend, LLM, agent, MCP, and database metadata |
 | `POST` | `/api/assistant/shopping/sessions` | Create a shopping assistant session |
-| `GET` | `/api/assistant/shopping/sessions` | Find most recent active shopping session |
-| `GET` | `/api/assistant/shopping/sessions/history` | List shopping chat sessions with cursor pagination |
-| `POST` | `/api/assistant/shopping/messages` | Send a shopping assistant message |
-| `GET` | `/api/assistant/shopping/sessions/{id}/messages` | Retrieve session message history |
-| `POST` | `/api/assistant/support/sessions` | Create a support/returns session |
-| `GET` | `/api/assistant/support/sessions` | Find most recent active support session |
-| `GET` | `/api/assistant/support/sessions/history` | List support chat sessions with cursor pagination |
-| `GET` | `/api/assistant/support/sessions/{id}/messages` | Retrieve support session message history |
-| `POST` | `/api/assistant/support/messages` | Send a support agent message |
-| `POST` | `/api/assistant/actions/confirm` | Confirm or cancel a pending mutating action |
-
----
-
-## Data Model
-
-### `chatSessions`
-```json
-{
-  "_id": "<hex24>",
-  "type": "shopping | returns_support",
-  "userId": "<userId>",
-  "context": { "entryPoint": "catalogue", "productId": null },
-  "status": "active",
-  "summary": "Find casual shoes under 3000.",
-  "messageCount": 2,
-  "createdAt": "<ISO8601>",
-  "updatedAt": "<ISO8601>"
-}
-```
-
-### `chatMessages`
-```json
-{
-  "_id": "<hex24>",
-  "sessionId": "<sessionId>",
-  "role": "user | assistant",
-  "content": "<text>",
-  "metadata": {
-    "suggestedProducts": [ "<compact product>" ],
-    "pendingActionId": "<actionId>",
-    "context": {}
-  },
-  "createdAt": "<ISO8601>"
-}
-```
-
-### `pendingActions`
-```json
-{
-  "_id": "<hex24>",
-  "sessionId": "<sessionId>",
-  "userId": "<userId>",
-  "type": "add_to_cart | create_return_request",
-  "payload": {},
-  "status": "pending | completed | cancelled | error",
-  "expiresAt": "<ISO8601>",
-  "createdAt": "<ISO8601>",
-  "updatedAt": "<ISO8601>"
-}
-```
+| `GET` | `/api/assistant/shopping/sessions` | Find latest active shopping session |
+| `GET` | `/api/assistant/shopping/sessions/history` | List shopping sessions |
+| `POST` | `/api/assistant/shopping/messages` | Send shopping assistant message |
+| `GET` | `/api/assistant/shopping/sessions/{id}/messages` | Retrieve shopping messages |
+| `POST` | `/api/assistant/support/sessions` | Create support session |
+| `GET` | `/api/assistant/support/sessions` | Find latest active support session |
+| `GET` | `/api/assistant/support/sessions/history` | List support sessions |
+| `GET` | `/api/assistant/support/sessions/{id}/messages` | Retrieve support messages |
+| `POST` | `/api/assistant/support/messages` | Send support message |
+| `POST` | `/api/assistant/actions/confirm` | Confirm or cancel pending action |
 
 ---
 
@@ -276,66 +278,86 @@ This would replace the current deterministic keyword-based dispatch, allowing th
 Start Core and Search first, then Chat Service:
 
 ```bash
-export CORE_SERVICE_BASE_URL=http://127.0.0.1:4000
-export SEARCH_SERVICE_BASE_URL=http://127.0.0.1:4001
-export CHAT_SERVICE_INTERNAL_TOKEN=replace-with-chat-service-token
-PYTHONPATH=services/chat_service uvicorn app.main:app --host 127.0.0.1 --port 4002
+set -a
+source .env
+set +a
+
+PYTHONPATH=services/chat_service \
+uvicorn app.main:app --host 127.0.0.1 --port 4002
 ```
 
-Seed Core demo data before exercising assistant flows:
+Health check:
 
 ```bash
-curl -X POST http://127.0.0.1:4000/api/test/reset \
-  -H "authorization: Bearer $TEST_ADMIN_TOKEN"
-
-curl -X POST http://127.0.0.1:4000/api/test/seed \
-  -H "authorization: Bearer $TEST_ADMIN_TOKEN" \
-  -H "content-type: application/json" \
-  -d '{"products":"fashion-minimal","users":true,"orders":true,"embeddings":true}'
+curl http://127.0.0.1:4002/api/health | python3 -m json.tool
 ```
 
----
+Important health fields:
 
-## Configuration
-
-| Variable | Default | Description |
-|---|---|---|
-| `CORE_SERVICE_BASE_URL` | `http://localhost:4000` | Core Service for auth, carts, orders, returns, support |
-| `SEARCH_SERVICE_BASE_URL` | `http://localhost:4001` | Search Service for products |
-| `CHAT_SERVICE_INTERNAL_TOKEN` | `` | Internal credential for audit log writes to Core |
-| `CHAT_SERVICE_DATA_PATH` | `./artifacts/chat_service/state.json` | File-backed state path |
-| `MONGODB_URI` | `` | Atlas URI; enables MongoDB persistence when set |
-| `MONGODB_DB` | `ecommerce_demo` | Atlas database name |
-| `LLM_PROVIDER` | `openai` | Provider name (display only) |
-| `LLM_MODEL` | `gpt-5.4` | Model identifier sent to the API |
-| `LLM_API_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible base URL |
-| `LLM_API_KEY` | `` | Required for live LLM calls; absent → deterministic fallback text |
-| `LLM_TIMEOUT_MS` | `60000` | Per-request LLM timeout |
-| `LLM_MAX_OUTPUT_TOKENS` | `1200` | Max tokens per LLM response |
-| `LLM_TEMPERATURE` | `0.3` | LLM sampling temperature |
-| `LLM_STREAMING_ENABLED` | `true` | Streaming flag sent in the request payload |
-| `CODEX_MCP_ENABLED` | `true` | Must be `true` for demo readiness gate |
-| `CODEX_MCP_TRANSPORT` | `stdio` | `stdio` or `http` |
-| `CODEX_MCP_COMMAND` | `codex` | Command for stdio transport |
-| `CODEX_MCP_URL` | `http://localhost:9000/mcp` | URL for HTTP/SSE transport |
-| `ASSISTANT_ACTION_TTL_SECONDS` | `900` | Pending action expiry window |
-| `CHAT_LOG_LEVEL` | `DEBUG` | Log verbosity |
-
-Do not commit real credentials. Use shell exports or a local `.env`.
-
-`CHAT_SERVICE_INTERNAL_TOKEN` must match the same variable loaded by Core Service. Placeholder values such as `replace-with-chat-service-token` are intentionally rejected by Core Service, so use a real local token string for audit-log writes during tests.
+- `.data.agent.harness`
+- `.data.agent.deepagentsAvailable`
+- `.data.agent.context`
+- `.data.agent.retry`
+- `.data.database`
+- `.data.mcp`
 
 ---
 
 ## Validation
 
+Compile check:
+
 ```bash
-# Compile check
-PYTHONPATH=services/chat_service python3 -m py_compile $(find services/chat_service/app -name '*.py' -print)
+PYTHONPATH=services/chat_service \
+python3 -m py_compile $(find services/chat_service/app -name '*.py' -print)
+```
 
-# Agent API tests (requires all three services running)
+Agent runtime import smoke:
+
+```bash
+PYTHONPATH=services/chat_service python3 - <<'PY'
+from app.agentic.service import agent_service
+meta = agent_service.metadata()
+print(meta["harness"], meta["enabled"], "context" in meta, "retry" in meta)
+PY
+```
+
+Cross-service API tests, with Core/Search/Chat running:
+
+```bash
 pytest tests/api/test_ai_agents_mcp.py
-
-# Full cross-service suite
 pytest tests/api
 ```
+
+---
+
+## Troubleshooting
+
+Deep Agents path is not used:
+
+- Install Chat Service dependencies again: `python3 -m pip install -e services/chat_service`.
+- Confirm `LLM_API_KEY` is not empty or placeholder-like.
+- Confirm `AGENTIC_ENABLED=true`.
+- Inspect `/api/health`; `agent.deepagentsAvailable` should be `true`.
+
+Chat works but audit writes fail:
+
+- Set the same `CHAT_SERVICE_INTERNAL_TOKEN` in Core and Chat.
+- Do not use placeholder values such as `replace-with-chat-service-token`.
+
+Search/Core calls fail transiently:
+
+- Read-only calls are retried according to `AGENT_RETRY_*`.
+- Non-retriable auth/ownership/validation/policy errors are not retried.
+- Mutating actions remain confirmation-gated and are not blindly retried.
+
+LLM context is too large:
+
+- Lower `AGENT_CONTEXT_TARGET_INPUT_TOKENS`.
+- Lower `AGENT_CONTEXT_RECENT_MESSAGE_LIMIT`.
+- Check `agentRuns.contextWindow` for messages included/dropped and pruning strategy.
+
+MCP readiness is false:
+
+- The current agentic path does not depend on MCP for normal chat execution.
+- MCP metadata remains for demo compatibility; install/configure Codex CLI only if you need MCP readiness checks.

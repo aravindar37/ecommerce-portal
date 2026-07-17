@@ -61,6 +61,13 @@ class MongoChatConnection:
         self.collection("chatMessages").create_index([("sessionId", 1), ("createdAt", 1)])
         self.collection("pendingActions").create_index([("userId", 1), ("status", 1), ("expiresAt", 1)])
         self.collection("pendingActions").create_index("expiresAt", expireAfterSeconds=0)
+        self.collection("agentRuns").create_index([("sessionId", 1), ("startedAt", -1)])
+        self.collection("agentRuns").create_index([("userId", 1), ("agentId", 1), ("startedAt", -1)])
+        self.collection("agentToolCalls").create_index([("runId", 1), ("createdAt", 1)])
+        self.collection("agentToolCalls").create_index([("sessionId", 1), ("createdAt", 1)])
+        self.collection("agentInterrupts").create_index([("pendingActionId", 1), ("userId", 1)])
+        self.collection("chatMemories").create_index([("userId", 1), ("agentId", 1), ("status", 1), ("updatedAt", -1)])
+        self.collection("chatEpisodes").create_index([("userId", 1), ("agentId", 1), ("updatedAt", -1)])
 
     def health(self) -> dict[str, object]:
         """Return database readiness metadata without exposing connection details."""

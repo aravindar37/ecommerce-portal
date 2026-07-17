@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.agents.audit import audit_tool_call
+from app.agentic.service import agent_service
 from app.dependencies import ChatContext
 from app.http import ServiceHttpError
 from app.llm.client import llm_client
@@ -42,6 +43,23 @@ class SupportAgent:
             compact(request_context),
         )
         store.add_message(session_id, "user", message, {"context": request_context})
+        agentic = agent_service.try_answer(context, session, message, request_context)
+        if agentic.message and agentic.used_agentic_loop:
+            metadata: Json = {
+                "usedAgenticLoop": agentic.used_agentic_loop,
+                "usedDeepAgents": agentic.used_deepagents,
+                "usedMcp": False,
+                "runId": agentic.run_id,
+                "contextWindow": agentic.context_window,
+            }
+            if agentic.pending_action:
+                metadata["pendingActionId"] = agentic.pending_action.get("id")
+                metadata["pendingActionType"] = agentic.pending_action.get("type")
+                metadata["pendingActionExpiresAt"] = agentic.pending_action.get("expiresAt")
+            store.add_message(session_id, "assistant", agentic.message, metadata)
+            payload = agentic.to_public_dict()
+            payload["usedMcp"] = False
+            return payload
         order_id = str(request_context.get("orderId") or session["context"].get("orderId") or "")
         order_item_id = str(request_context.get("orderItemId") or "")
         if not order_id or not order_item_id:
@@ -125,7 +143,18 @@ class SupportAgent:
             ],
             fallback_text,
         )
-        store.add_message(session_id, "assistant", text, {"usedMcp": True, "pendingActionId": action["_id"], "mcpPlan": plan})
+        store.add_message(
+            session_id,
+            "assistant",
+            text,
+            {
+                "usedMcp": True,
+                "pendingActionId": action["_id"],
+                "pendingActionType": action["type"],
+                "pendingActionExpiresAt": action["expiresAt"],
+                "mcpPlan": plan,
+            },
+        )
         reply = {
             "message": text,
             "usedMcp": True,
@@ -184,6 +213,27 @@ class SupportAgent:
         """Execute a confirmed support action."""
 
         payload = action["payload"]
+        if action["type"] == "create_support_ticket":
+            ticket = core_tools.create_support_ticket(
+                context.cookie_header,
+                str(payload["category"]),
+                str(payload["priority"]),
+                str(payload["subject"]),
+                str(payload["body"]),
+                payload.get("orderId"),
+            )
+            audit_tool_call(
+                action["sessionId"],
+                context.user["_id"],
+                "returns_support",
+                "createSupportTicket",
+                {"category": payload["category"], "priority": payload["priority"], "subject": payload["subject"]},
+                {"ticketNumber": ticket.get("ticketNumber")},
+            )
+            completed = store.complete_action(action, "completed", {"ticketNumber": ticket.get("ticketNumber")})
+            reply = {"status": completed["status"], "actionId": completed["_id"], "result": ticket}
+            logger.debug("agent.response support.confirm_ticket actionId=%s response=%s", action.get("_id"), compact(reply))
+            return reply
         reason = str(payload["reason"]).strip()
         condition = str(payload["condition"]).strip()
         resolution = str(payload["resolution"]).strip()

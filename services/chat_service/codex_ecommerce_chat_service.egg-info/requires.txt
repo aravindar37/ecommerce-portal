@@ -1,3 +1,10 @@
 fastapi<1,>=0.115
+langchain<2,>=0.3
+langchain-core<2,>=0.3
+langchain-openai<2,>=0.3
+langgraph<2,>=0.3
 pydantic<3,>=2.11
+pymongo<5,>=4.13
+certifi>=2025.1.31
+starlette<2,>=0.46
 uvicorn<1,>=0.30

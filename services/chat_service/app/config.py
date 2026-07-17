@@ -30,6 +30,31 @@ class ChatServiceSettings(BaseModel):
     llm_max_output_tokens: int = Field(default=1200)
     llm_temperature: float = Field(default=0.3)
     llm_streaming_enabled: bool = Field(default=True)
+    agent_harness: str = Field(default="langgraph")
+    agentic_enabled: bool = Field(default=True)
+    agent_max_model_calls_per_run: int = Field(default=8)
+    agent_max_tool_calls_per_run: int = Field(default=12)
+    agent_tool_timeout_ms: int = Field(default=15000)
+    agent_streaming_enabled: bool = Field(default=True)
+    agent_summary_trigger_messages: int = Field(default=6)
+    agent_memory_enabled: bool = Field(default=True)
+    agent_episodic_memory_enabled: bool = Field(default=True)
+    agent_hitl_enabled: bool = Field(default=True)
+    agent_deepagents_enable_subagents: bool = Field(default=True)
+    agent_deepagents_memory_paths: str = Field(default="/memories/preferences.md,/memories/episodes.md")
+    agent_deepagents_filesystem_policy: str = Field(default="deny")
+    agent_retry_max_attempts: int = Field(default=3)
+    agent_retry_base_delay_ms: int = Field(default=250)
+    agent_retry_max_delay_ms: int = Field(default=3000)
+    agent_retry_jitter_enabled: bool = Field(default=True)
+    agent_retryable_status_codes: str = Field(default="408,409,425,429,500,502,503,504")
+    agent_context_max_input_tokens: int = Field(default=24000)
+    agent_context_target_input_tokens: int = Field(default=18000)
+    agent_context_recent_message_limit: int = Field(default=12)
+    agent_context_relevance_top_k: int = Field(default=8)
+    agent_context_summary_max_tokens: int = Field(default=1200)
+    agent_context_tool_result_max_tokens: int = Field(default=1600)
+    agent_trace_verbose: bool = Field(default=False)
     codex_mcp_enabled: bool = Field(default=True)
     codex_mcp_transport: str = Field(default="stdio")
     codex_mcp_command: str = Field(default="codex")
@@ -67,6 +92,31 @@ class ChatServiceSettings(BaseModel):
             llm_max_output_tokens=int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "1200")),
             llm_temperature=float(os.getenv("LLM_TEMPERATURE", "0.3")),
             llm_streaming_enabled=os.getenv("LLM_STREAMING_ENABLED", "true").lower() == "true",
+            agent_harness=os.getenv("AGENT_HARNESS", "langgraph"),
+            agentic_enabled=os.getenv("AGENTIC_ENABLED", "true").lower() == "true",
+            agent_max_model_calls_per_run=int(os.getenv("AGENT_MAX_MODEL_CALLS_PER_RUN", "8")),
+            agent_max_tool_calls_per_run=int(os.getenv("AGENT_MAX_TOOL_CALLS_PER_RUN", "12")),
+            agent_tool_timeout_ms=int(os.getenv("AGENT_TOOL_TIMEOUT_MS", "15000")),
+            agent_streaming_enabled=os.getenv("AGENT_STREAMING_ENABLED", "true").lower() == "true",
+            agent_summary_trigger_messages=int(os.getenv("AGENT_SUMMARY_TRIGGER_MESSAGES", "6")),
+            agent_memory_enabled=os.getenv("AGENT_MEMORY_ENABLED", "true").lower() == "true",
+            agent_episodic_memory_enabled=os.getenv("AGENT_EPISODIC_MEMORY_ENABLED", "true").lower() == "true",
+            agent_hitl_enabled=os.getenv("AGENT_HITL_ENABLED", "true").lower() == "true",
+            agent_deepagents_enable_subagents=os.getenv("AGENT_DEEPAGENTS_ENABLE_SUBAGENTS", "true").lower() == "true",
+            agent_deepagents_memory_paths=os.getenv("AGENT_DEEPAGENTS_MEMORY_PATHS", "/memories/preferences.md,/memories/episodes.md"),
+            agent_deepagents_filesystem_policy=os.getenv("AGENT_DEEPAGENTS_FILESYSTEM_POLICY", "deny"),
+            agent_retry_max_attempts=int(os.getenv("AGENT_RETRY_MAX_ATTEMPTS", "3")),
+            agent_retry_base_delay_ms=int(os.getenv("AGENT_RETRY_BASE_DELAY_MS", "250")),
+            agent_retry_max_delay_ms=int(os.getenv("AGENT_RETRY_MAX_DELAY_MS", "3000")),
+            agent_retry_jitter_enabled=os.getenv("AGENT_RETRY_JITTER_ENABLED", "true").lower() == "true",
+            agent_retryable_status_codes=os.getenv("AGENT_RETRYABLE_STATUS_CODES", "408,409,425,429,500,502,503,504"),
+            agent_context_max_input_tokens=int(os.getenv("AGENT_CONTEXT_MAX_INPUT_TOKENS", "24000")),
+            agent_context_target_input_tokens=int(os.getenv("AGENT_CONTEXT_TARGET_INPUT_TOKENS", "18000")),
+            agent_context_recent_message_limit=int(os.getenv("AGENT_CONTEXT_RECENT_MESSAGE_LIMIT", "12")),
+            agent_context_relevance_top_k=int(os.getenv("AGENT_CONTEXT_RELEVANCE_TOP_K", "8")),
+            agent_context_summary_max_tokens=int(os.getenv("AGENT_CONTEXT_SUMMARY_MAX_TOKENS", "1200")),
+            agent_context_tool_result_max_tokens=int(os.getenv("AGENT_CONTEXT_TOOL_RESULT_MAX_TOKENS", "1600")),
+            agent_trace_verbose=os.getenv("AGENT_TRACE_VERBOSE", "false").lower() == "true",
             codex_mcp_enabled=os.getenv("CODEX_MCP_ENABLED", "true").lower() == "true",
             codex_mcp_transport=os.getenv("CODEX_MCP_TRANSPORT", "stdio"),
             codex_mcp_command=os.getenv("CODEX_MCP_COMMAND", "codex"),
