@@ -1,7 +1,8 @@
-"""Per-call STT → verified agent → TTS orchestration for local voice streams."""
+"""Per-call realtime STT → verified agent → TTS orchestration for local voice streams."""
 
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -11,13 +12,13 @@ from typing import Any
 from app.agentic.service import agent_service
 from app.config import ChatServiceSettings, settings
 from app.dependencies import ChatContext
+from app.observability import logger, voice_metrics
 from app.store import Json, store
 from app.tools.core import core_tools
 
-from .elevenlabs import elevenlabs_speech
+from .elevenlabs import ElevenLabsRealtimeSttSession, RealtimeSttNonRetryableError, elevenlabs_speech
 from .identity import VoiceIdentity, voice_identity
 from .recordings import call_recordings
-from .vad import VoiceActivityDetector
 
 
 @dataclass
@@ -27,9 +28,13 @@ class VoiceCall:
     call_id: str
     chat_session: Json
     identity: VoiceIdentity
-    detector: VoiceActivityDetector
     started_at: datetime
+    detector: Any | None = None
+    realtime_stt: ElevenLabsRealtimeSttSession | None = None
     recording_frames: list[bytes] = field(default_factory=list)
+    replay_frames: list[tuple[float, bytes]] = field(default_factory=list)
+    replay_audio_end_seconds: float = 0.0
+    realtime_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     transcript_parts: list[str] = field(default_factory=list)
     stt_requests: int = 0
     tts_requests: int = 0
@@ -54,40 +59,105 @@ class VoicePipeline:
             {"entryPoint": "voice_call", "callId": call_id, "callerPhoneNumberMasked": masked_phone},
         )
         store.create_voice_call_session(call_id, masked_phone, {"entryPoint": "voice_call"})
+        store.update_voice_call_session(call_id, {"chatSessionId": chat_session["_id"]})
+        voice_metrics.record_call_started()
         self._voice_activity("voice_call_started", None, {"callId": call_id})
         return VoiceCall(
             call_id=call_id,
             chat_session=chat_session,
             identity=identity,
-            detector=VoiceActivityDetector(
-                sample_rate=16000,
-                silence_threshold_db=self.config.voice_vad_silence_threshold_db,
-                silence_duration_ms=self.config.voice_vad_silence_duration_ms,
-                min_utterance_ms=self.config.voice_vad_min_utterance_ms,
-            ),
             started_at=datetime.now(UTC),
         )
 
-    def push_audio(self, call: VoiceCall, frame: bytes) -> bytes | None:
-        """Accept a caller PCM frame and return synthesized PCM after an utterance ends."""
+    async def open_realtime_stt(self, call: VoiceCall) -> None:
+        """Attach the one persistent upstream transcription session to a call."""
 
-        call.recording_frames.append(frame)
-        utterance = call.detector.push(frame)
-        return self.process_utterance(call, utterance) if utterance else None
+        call.realtime_stt = await elevenlabs_speech.open_realtime_stt_session()
+        voice_metrics.record_stt_connection_opened()
 
-    def flush(self, call: VoiceCall) -> bytes | None:
-        """Process any trailing utterance when a caller ends their stream."""
+    async def push_audio(self, call: VoiceCall, frame: bytes) -> None:
+        """Forward one PCM frame immediately without local utterance buffering."""
 
-        utterance = call.detector.flush()
-        return self.process_utterance(call, utterance) if utterance else None
+        async with call.realtime_lock:
+            call.recording_frames.append(frame)
+            call.replay_audio_end_seconds += len(frame) / (16000 * 2)
+            call.replay_frames.append((call.replay_audio_end_seconds, frame))
+            if not call.realtime_stt:
+                await self._reconnect_locked(call)
+                return
+            try:
+                await call.realtime_stt.send_pcm16(frame)
+            except RealtimeSttNonRetryableError:
+                raise
+            except ConnectionError:
+                await self._reconnect_locked(call)
 
-    def process_utterance(self, call: VoiceCall, utterance: bytes) -> bytes:
-        """Run an utterance through STT, the agent harness, and TTS."""
+    async def next_transcript(self, call: VoiceCall) -> tuple[str, str] | None:
+        """Read the next upstream event and return only a typed, safe transcript."""
+
+        if not call.realtime_stt:
+            return None
+        try:
+            event = await call.realtime_stt.receive()
+        except RealtimeSttNonRetryableError:
+            raise
+        except ConnectionError:
+            await self.reconnect_realtime_stt(call)
+            return await self.next_transcript(call)
+        if not event:
+            return None
+        if event.message_type == "partial_transcript":
+            voice_metrics.record_stt_partial_transcript()
+        else:
+            voice_metrics.record_stt_committed_transcript()
+            if event.committed_audio_end_seconds is not None:
+                async with call.realtime_lock:
+                    call.replay_frames = [
+                        (frame_end, frame)
+                        for frame_end, frame in call.replay_frames
+                        if frame_end > event.committed_audio_end_seconds
+                    ]
+        return event.message_type, event.text
+
+    async def reconnect_realtime_stt(self, call: VoiceCall) -> None:
+        """Restore one call after a transport failure and replay only uncommitted PCM."""
+
+        async with call.realtime_lock:
+            await self._reconnect_locked(call)
+
+    async def _reconnect_locked(self, call: VoiceCall) -> None:
+        """Apply the approved two-retry, fixed-delay, forty-second reconnect policy."""
+
+        started = time.monotonic()
+        last_error: Exception | None = None
+        for attempt in range(3):
+            if attempt:
+                remaining = 40 - (time.monotonic() - started)
+                if remaining < 15:
+                    break
+                await asyncio.sleep(15)
+            try:
+                if call.realtime_stt:
+                    await call.realtime_stt.close()
+                call.realtime_stt = await elevenlabs_speech.open_realtime_stt_session()
+                voice_metrics.record_stt_connection_opened()
+                for _, frame in call.replay_frames:
+                    await call.realtime_stt.send_pcm16(frame)
+                return
+            except RealtimeSttNonRetryableError:
+                raise
+            except Exception as exc:
+                last_error = exc
+                call.realtime_stt = None
+                voice_metrics.record_stt_connection_failed()
+        raise ConnectionError("ElevenLabs realtime speech reconnection budget exhausted") from last_error
+
+    def process_committed_transcript(self, call: VoiceCall, transcript: str, stt_ms: int = 0) -> bytes:
+        """Run only a provider-committed transcript through the agent harness and TTS."""
 
         started = time.perf_counter()
-        transcript = elevenlabs_speech.transcribe_pcm16(utterance)
-        stt_ms = round((time.perf_counter() - started) * 1000)
         call.stt_requests += 1
+        logger.info("voice.turn.agent_started callId=%s sttRequestCount=%s", call.call_id, call.stt_requests)
         call.transcript_parts.append(f"Caller: {transcript}")
         store.add_message(call.chat_session["_id"], "user", transcript, {"voice": True, "sttLatencyMs": stt_ms})
 
@@ -117,27 +187,44 @@ class VoicePipeline:
         )
         agent_ms = round((time.perf_counter() - agent_started) * 1000)
         reply = result.message.strip() or self._verification_prompt(identity)
+        logger.info(
+            "voice.turn.agent_completed callId=%s agentMs=%s replyLength=%s",
+            call.call_id,
+            agent_ms,
+            len(reply),
+        )
         store.add_message(call.chat_session["_id"], "assistant", reply, {"voice": True, "agentLatencyMs": agent_ms, "usedAgenticLoop": result.used_agentic_loop})
         call.transcript_parts.append(f"Agent: {reply}")
 
         return self._synthesize_reply(call, reply, started, stt_ms, agent_ms)
 
+    async def close_realtime_stt(self, call: VoiceCall) -> None:
+        """Close the upstream WSS before persisting the final call disposition."""
+
+        if call.realtime_stt:
+            await call.realtime_stt.close()
+            call.realtime_stt = None
+
     def _synthesize_reply(self, call: VoiceCall, reply: str, started: float, stt_ms: int, agent_ms: int) -> bytes:
         """Persist a reply and synthesize it consistently for agent and confirmation turns."""
 
         tts_started = time.perf_counter()
+        logger.info("voice.turn.tts_started callId=%s replyLength=%s", call.call_id, len(reply))
         audio = elevenlabs_speech.synthesize_pcm16(reply)
         tts_ms = round((time.perf_counter() - tts_started) * 1000)
         call.tts_requests += 1
         call.recording_frames.append(audio)
         call.escalated = call.escalated or self._is_escalation(reply)
+        total_ms = round((time.perf_counter() - started) * 1000)
+        voice_metrics.record_turn(stt_ms, agent_ms, tts_ms, total_ms)
+        logger.info("voice.turn.tts_completed callId=%s ttsMs=%s pcmBytes=%s", call.call_id, tts_ms, len(audio))
         store.update_voice_call_session(
             call.call_id,
             {
                 "sttRequestCount": call.stt_requests,
                 "ttsRequestCount": call.tts_requests,
                 "transcriptSummary": " ".join(call.transcript_parts)[-2000:],
-                "lastTurnLatencyMs": {"stt": stt_ms, "agent": agent_ms, "tts": tts_ms, "total": round((time.perf_counter() - started) * 1000)},
+                "lastTurnLatencyMs": {"stt": stt_ms, "agent": agent_ms, "tts": tts_ms, "total": total_ms},
             },
         )
         return audio
@@ -209,6 +296,7 @@ class VoicePipeline:
             updates["recordingS3Bucket"] = upload["bucket"]
             updates["recordingS3Key"] = upload["key"]
         record = store.update_voice_call_session(call.call_id, updates)
+        voice_metrics.record_call_ended(duration, call.identity.verified, call.escalated, bool(upload))
         if call.escalated:
             self._voice_activity("voice_call_escalated", call.identity.verified_user_id, {"callId": call.call_id})
         self._voice_activity("voice_call_ended", call.identity.verified_user_id, {"callId": call.call_id, "durationSeconds": duration})
@@ -235,6 +323,7 @@ class VoicePipeline:
         call.chat_session = store.bind_session_to_user(call.chat_session["_id"], user_id) or call.chat_session
         call.chat_session["userId"] = user_id
         store.update_voice_call_session(call.call_id, {"userId": user_id, "chatSessionId": call.chat_session["_id"], "verificationOutcome": "verified"})
+        voice_metrics.record_call_verified()
         self._voice_activity("voice_call_verified", user_id, {"callId": call.call_id})
 
     def _voice_activity(self, event_type: str, user_id: str | None, metadata: Json) -> None:

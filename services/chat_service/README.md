@@ -125,6 +125,51 @@ Supported confirmed actions:
 
 ---
 
+## Local Voice Support Demo
+
+Voice support is a development-only, local microphone/speaker flow in v1. It uses the MacBook microphone and speaker through `tools/voice_mock_telephony`; it does not provide a published phone number, Twilio/SIP ingress, or real PSTN calls.
+
+### Prerequisites
+
+- Core Service, Search Service, and Chat Service running locally.
+- A configured ElevenLabs realtime Speech-to-Text API key and Text-to-Speech voice ID in `.env`.
+- A configured private S3 recordings bucket if recording persistence is required for the session.
+- PortAudio installed on macOS:
+
+```bash
+brew install portaudio
+```
+
+- Voice mock dependencies installed into the selected local Python environment:
+
+```bash
+python3 -m pip install -e tools/voice_mock_telephony
+```
+
+### Run a local call
+
+Set `APP_ENV=development` and `VOICE_TELEPHONY_PROVIDER=local`. Ensure the Chat Service has the same `VOICE_STREAM_WS_AUTH_TOKEN` as the mock tool, then start the relay from the repository root:
+
+```bash
+scripts/run_voice_mock_telephony.sh --caller-phone +15555550100
+```
+
+The optional caller number is only a soft ANI hint. It never authorizes account access: callers must still verify an order number plus a last name or postal code before the agent may reveal or change order-specific data. The local tool sends PCM16/16 kHz mono frames to `ws://localhost:4002/api/voice/stream`; Chat Service opens one persistent ElevenLabs real-time STT WebSocket for that call, base64-encodes and forwards frames, runs the `voice_support` agent only for a `committed_transcript`, synthesizes TTS, and records both directions.
+
+The upstream STT connection uses `ELEVENLABS_STT_REALTIME_WS_URL` with `model_id=scribe_v2_realtime`, `audio_format=pcm_16000`, `commit_strategy=vad`, `vad_silence_threshold_secs=1.5`, `no_verbatim=true`, and `include_timestamps=true`. `partial_transcript` packets are ephemeral: Chat Service neither persists them nor sends them to the agent, tools, or TTS. ElevenLabs VAD commits are the authoritative turn boundary; the local VAD/utterance buffer is not used. Word-end timestamps on each committed transcript trim the replay buffer, so reconnect replay includes only PCM later than the committed session-relative audio boundary.
+
+Use Ctrl+C to stop the local call. The server finalizes the call record and attempts the recording upload even if a turn fails.
+
+### Safeguards and limitations
+
+- The launcher refuses to run outside `APP_ENV=development`.
+- `VOICE_TELEPHONY_PROVIDER=elevenlabs_twilio` is reserved for Phase F and fails fast; there is no Twilio, SIP, tunnel, or real phone-number implementation in v1.
+- No tunnel is needed for local use: the mock tool connects to Chat Service over localhost and Chat Service makes outbound secure WSS calls for STT plus HTTPS calls for TTS.
+- Voice mutations require an explicit spoken `yes`, `yes please`, `please do`, or `confirm`. Other replies—including `no` and `cancel`—leave pending actions unexecuted.
+- S3 retention/lifecycle hardening remains deferred. The current implementation stores only the private bucket/key in call metadata and never exposes recording URLs to the frontend.
+
+---
+
 ## Prerequisites
 
 - Python 3.11 or newer.

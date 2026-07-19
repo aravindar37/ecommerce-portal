@@ -19,7 +19,14 @@ from app.voice.recordings import CallRecordingStore  # noqa: E402
 def recording_store() -> CallRecordingStore:
     """Return an independently configured recording store for testing."""
 
-    return CallRecordingStore(ChatServiceSettings(aws_region="us-east-1", aws_s3_call_recordings_bucket="private-recordings"))
+    return CallRecordingStore(
+        ChatServiceSettings(
+            aws_region="us-east-1",
+            aws_s3_call_recordings_bucket="private-recordings",
+            agent_retry_max_attempts=2,
+            agent_retry_base_delay_ms=0,
+        )
+    )
 
 
 def test_wav_encoding_preserves_pcm16_format() -> None:
@@ -57,3 +64,30 @@ def test_upload_failure_does_not_escape_call_finalization() -> None:
     fake_boto3 = types.SimpleNamespace(client=Mock(return_value=client))
     with patch.dict(sys.modules, {"boto3": fake_boto3}):
         assert recording_store().upload("call-1", b"\x00\x00") is None
+
+
+def test_upload_error_metadata_is_safe_and_specific() -> None:
+    """S3 error diagnostics expose only code/status, not response bodies or credentials."""
+
+    error = RuntimeError("denied")
+    error.response = {"Error": {"Code": "AccessDenied"}, "ResponseMetadata": {"HTTPStatusCode": 403}}  # type: ignore[attr-defined]
+
+    assert CallRecordingStore._upload_error_code(error) == "AccessDenied"
+    assert CallRecordingStore._upload_error_status(error) == 403
+
+
+def test_transient_upload_failure_retries_the_same_call_key() -> None:
+    """A transient failure retries once using the deterministic call-ID object key."""
+
+    client = Mock()
+    client.put_object.side_effect = [TimeoutError("temporary"), None]
+    fake_boto3 = types.SimpleNamespace(client=Mock(return_value=client))
+    with patch.dict(sys.modules, {"boto3": fake_boto3}):
+        result = recording_store().upload("call-1", b"\x00\x00")
+
+    assert result == {"bucket": "private-recordings", "key": "voice-call-recordings/call-1.wav"}
+    assert client.put_object.call_count == 2
+    assert [call.kwargs["Key"] for call in client.put_object.call_args_list] == [
+        "voice-call-recordings/call-1.wav",
+        "voice-call-recordings/call-1.wav",
+    ]

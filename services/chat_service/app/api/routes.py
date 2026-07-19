@@ -14,7 +14,9 @@ from app.dependencies import require_user_context
 from app.llm.client import llm_client
 from app.mcp.client import mcp_client
 from app.models import ConfirmActionRequest, ShoppingMessageRequest, ShoppingSessionRequest, SupportMessageRequest, SupportSessionRequest
+from app.observability import voice_metrics
 from app.store import store
+from app.voice.elevenlabs import elevenlabs_speech
 
 router = APIRouter(prefix="/api", tags=["api"])
 
@@ -35,9 +37,9 @@ def health() -> dict[str, object]:
             "voice": {
                 "enabled": settings.voice_telephony_provider == "local",
                 "telephonyProvider": settings.voice_telephony_provider,
-                "sttConfigured": bool(settings.elevenlabs_api_key.strip()),
-                "ttsConfigured": bool(settings.elevenlabs_api_key.strip() and settings.elevenlabs_voice_id.strip()),
+                **elevenlabs_speech.readiness(),
                 "recordingStorageConfigured": bool(settings.aws_region.strip() and settings.aws_s3_call_recordings_bucket.strip()),
+                "metrics": voice_metrics.snapshot(),
             },
             "ready": bool(mcp["enabled"] and mcp["ready"]),
         }

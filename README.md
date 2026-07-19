@@ -3,6 +3,7 @@
 Demo fashion ecommerce application with three Python/FastAPI backend services, a Next.js/React frontend, MongoDB Atlas product/vector storage, semantic search, and Codex-powered shopping and support agents.
 
 The authoritative product and engineering spec is in [ecommerce-demo-spec.md](./codex_workspace/ecommerce-demo-spec.md).
+See [docs/architecture.md](./docs/architecture.md) for the runtime and voice-call architecture diagrams.
 
 ## How It Is Set Up
 

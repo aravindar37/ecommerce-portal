@@ -70,8 +70,12 @@ class ChatServiceSettings(BaseModel):
     log_response_bodies: bool = Field(default=True)
     elevenlabs_api_key: str = Field(default="")
     elevenlabs_voice_id: str = Field(default="")
-    elevenlabs_stt_model: str = Field(default="scribe_v2")
-    elevenlabs_stt_api_url: str = Field(default="https://api.elevenlabs.io/v1/speech-to-text")
+    elevenlabs_stt_model: str = Field(default="scribe_v2_realtime")
+    elevenlabs_stt_realtime_ws_url: str = Field(default="wss://api.elevenlabs.io/v1/speech-to-text/realtime")
+    elevenlabs_stt_commit_strategy: str = Field(default="vad")
+    elevenlabs_stt_vad_silence_threshold_secs: float = Field(default=1.5, gt=0)
+    elevenlabs_stt_no_verbatim: bool = Field(default=True)
+    elevenlabs_stt_include_timestamps: bool = Field(default=True)
     elevenlabs_tts_model: str = Field(default="eleven_flash_v2_5")
     elevenlabs_tts_api_url: str = Field(default="https://api.elevenlabs.io/v1/text-to-speech")
     elevenlabs_tts_output_format: str = Field(default="pcm_16000")
@@ -79,10 +83,7 @@ class ChatServiceSettings(BaseModel):
     voice_stream_ws_auth_token: str = Field(default="")
     voice_agent_session_type: str = Field(default="voice_support")
     voice_caller_verification_max_attempts: int = Field(default=2)
-    voice_vad_silence_threshold_db: float = Field(default=-40)
-    voice_vad_silence_duration_ms: int = Field(default=600)
-    voice_vad_min_utterance_ms: int = Field(default=250)
-    voice_turn_max_latency_ms: int = Field(default=3000)
+    voice_turn_max_latency_ms: int = Field(default=8000)
     aws_region: str = Field(default="")
     aws_s3_call_recordings_bucket: str = Field(default="")
     call_recording_retention_days: int = Field(default=1)
@@ -151,8 +152,12 @@ class ChatServiceSettings(BaseModel):
             log_response_bodies=os.getenv("CHAT_LOG_RESPONSE_BODIES", "true").lower() == "true",
             elevenlabs_api_key=os.getenv("ELEVENLABS_API_KEY", ""),
             elevenlabs_voice_id=os.getenv("ELEVENLABS_VOICE_ID", ""),
-            elevenlabs_stt_model=os.getenv("ELEVENLABS_STT_MODEL", "scribe_v2"),
-            elevenlabs_stt_api_url=os.getenv("ELEVENLABS_STT_API_URL", "https://api.elevenlabs.io/v1/speech-to-text"),
+            elevenlabs_stt_model=os.getenv("ELEVENLABS_STT_MODEL", "scribe_v2_realtime"),
+            elevenlabs_stt_realtime_ws_url=os.getenv("ELEVENLABS_STT_REALTIME_WS_URL", "wss://api.elevenlabs.io/v1/speech-to-text/realtime"),
+            elevenlabs_stt_commit_strategy=os.getenv("ELEVENLABS_STT_COMMIT_STRATEGY", "vad"),
+            elevenlabs_stt_vad_silence_threshold_secs=float(os.getenv("ELEVENLABS_STT_VAD_SILENCE_THRESHOLD_SECS", "1.5")),
+            elevenlabs_stt_no_verbatim=os.getenv("ELEVENLABS_STT_NO_VERBATIM", "true").lower() == "true",
+            elevenlabs_stt_include_timestamps=os.getenv("ELEVENLABS_STT_INCLUDE_TIMESTAMPS", "true").lower() == "true",
             elevenlabs_tts_model=os.getenv("ELEVENLABS_TTS_MODEL", "eleven_flash_v2_5"),
             elevenlabs_tts_api_url=os.getenv("ELEVENLABS_TTS_API_URL", "https://api.elevenlabs.io/v1/text-to-speech"),
             elevenlabs_tts_output_format=os.getenv("ELEVENLABS_TTS_OUTPUT_FORMAT", "pcm_16000"),
@@ -160,10 +165,7 @@ class ChatServiceSettings(BaseModel):
             voice_stream_ws_auth_token=os.getenv("VOICE_STREAM_WS_AUTH_TOKEN", ""),
             voice_agent_session_type=os.getenv("VOICE_AGENT_SESSION_TYPE", "voice_support"),
             voice_caller_verification_max_attempts=int(os.getenv("VOICE_CALLER_VERIFICATION_MAX_ATTEMPTS", "2")),
-            voice_vad_silence_threshold_db=float(os.getenv("VOICE_VAD_SILENCE_THRESHOLD_DB", "-40")),
-            voice_vad_silence_duration_ms=int(os.getenv("VOICE_VAD_SILENCE_DURATION_MS", "600")),
-            voice_vad_min_utterance_ms=int(os.getenv("VOICE_VAD_MIN_UTTERANCE_MS", "250")),
-            voice_turn_max_latency_ms=int(os.getenv("VOICE_TURN_MAX_LATENCY_MS", "3000")),
+            voice_turn_max_latency_ms=int(os.getenv("VOICE_TURN_MAX_LATENCY_MS", "8000")),
             aws_region=os.getenv("AWS_REGION", ""),
             aws_s3_call_recordings_bucket=os.getenv("AWS_S3_CALL_RECORDINGS_BUCKET", ""),
             call_recording_retention_days=int(os.getenv("CALL_RECORDING_RETENTION_DAYS", "1")),

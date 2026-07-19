@@ -37,8 +37,27 @@ def list_call_sessions(
             "verificationOutcome": item.get("verificationOutcome"),
             "disposition": item.get("disposition"),
             "escalated": item.get("escalated"),
+            "supportTicketNumber": item.get("supportTicketNumber"),
+            "recordingStored": bool(item.get("recordingS3Bucket") and item.get("recordingS3Key")),
             "transcriptSummary": item.get("transcriptSummary"),
         }
         for item in records
     ]
     return ok({"items": items})
+
+
+@router.get("/call-sessions/{call_id}/transcript")
+def get_call_transcript(call_id: str, _: Annotated[bool, Depends(require_admin)]) -> dict[str, object]:
+    """Return the persisted text transcript for an admin without recording location or caller ANI."""
+
+    call = store.find_voice_call_session(call_id)
+    if not call:
+        fail(404, "VOICE_CALL_NOT_FOUND", "Voice call session was not found.")
+    session_id = call.get("chatSessionId")
+    messages = store.list_messages(str(session_id), limit=200) if session_id else []
+    items = [
+        {"role": message.get("role"), "content": message.get("content"), "createdAt": message.get("createdAt")}
+        for message in messages
+        if message.get("role") in {"user", "assistant"}
+    ]
+    return ok({"callId": call_id, "disposition": call.get("disposition"), "items": items})

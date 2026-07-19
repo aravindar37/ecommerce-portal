@@ -326,6 +326,15 @@ class ChatStore:
         records = sorted(self.state["voiceCallSessions"], key=lambda item: item.get("startedAt") or "", reverse=True)
         return clone(records[:bounded_limit])
 
+    def find_voice_call_session(self, call_id: str) -> Json | None:
+        """Return one voice session for server-side restricted admin views."""
+
+        if mongo.configured:
+            doc = mongo.collection("voiceCallSessions").find_one({"callId": call_id})
+            return normalize(doc) if doc else None
+        record = next((item for item in self.state["voiceCallSessions"] if item["callId"] == call_id), None)
+        return clone(record) if record else None
+
     def create_action(self, session_id: str, user_id: str, action_type: str, payload: Json) -> Json:
         """Create a pending mutating action."""
 

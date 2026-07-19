@@ -41,7 +41,7 @@ export default async function AdminPage() {
   const host = requestHeaders.get("host") ?? "localhost:3000";
   const config = await fetchCoreAdmin<AdminConfig>("/api/admin/config");
   const activity = await fetchCoreAdmin<{ items: unknown[] }>("/api/admin/activity-events?limit=20");
-  const voiceCalls = await fetchChatAdmin<{ items: Array<{ disposition?: string; durationSeconds?: number; escalated?: boolean; verificationOutcome?: string; transcriptSummary?: string }> }>("/api/admin/voice/call-sessions?limit=10");
+  const voiceCalls = await fetchChatAdmin<{ items: Array<{ callId?: string; disposition?: string; durationSeconds?: number; escalated?: boolean; verificationOutcome?: string; transcriptSummary?: string }> }>("/api/admin/voice/call-sessions?limit=10");
 
   return (
     <main className="main">
@@ -82,6 +82,7 @@ export default async function AdminPage() {
             <p className="meta" key={index}>
               {call.disposition ?? "unknown"} · {call.durationSeconds ?? 0}s · {call.verificationOutcome ?? "pending"}{call.escalated ? " · escalated" : ""}
               {call.transcriptSummary ? ` — ${call.transcriptSummary}` : ""}
+              {call.callId ? <> · <a href={`/admin/voice/${encodeURIComponent(call.callId)}`}>Transcript</a></> : null}
             </p>
           )) : <p className="meta">No voice calls yet.</p>}
         </div>
