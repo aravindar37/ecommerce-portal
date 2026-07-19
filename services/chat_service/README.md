@@ -1,6 +1,8 @@
 # Chat Service
 
-FastAPI service for StyleSense shopping and returns/support assistants. Chat Service owns authenticated chat sessions, assistant messages, pending human confirmations, Deep Agents-oriented orchestration, ecommerce-safe tool wrappers, token-aware context assembly, transient retry handling, memory/run records, LLM provider routing, local Codex MCP readiness metadata, and agent audit logging.
+FastAPI service for StyleSense shopping and returns/support assistants. Chat Service owns authenticated chat sessions, assistant messages, pending human confirmations, Deep Agents-oriented orchestration, ecommerce-safe tool wrappers, token-aware context assembly, transient retry handling, memory/run records, LLM provider routing, local Codex MCP readiness metadata, agent audit logging, and development-only local voice support.
+
+See the repository [architecture diagram](../../docs/architecture.md) for the service topology and local voice-call sequence.
 
 ---
 
@@ -127,46 +129,39 @@ Supported confirmed actions:
 
 ## Local Voice Support Demo
 
-Voice support is a development-only, local microphone/speaker flow in v1. It uses the MacBook microphone and speaker through `tools/voice_mock_telephony`; it does not provide a published phone number, Twilio/SIP ingress, or real PSTN calls.
+Voice support is a development-only browser microphone/speaker flow. It does not provide a published phone number, Twilio/SIP ingress, tunnel, or real PSTN calls.
 
 ### Prerequisites
 
-- Core Service, Search Service, and Chat Service running locally.
+- Core Service, Search Service, and Chat Service running locally. The repository launcher starts all three.
 - A configured ElevenLabs realtime Speech-to-Text API key and Text-to-Speech voice ID in `.env`.
 - A configured private S3 recordings bucket if recording persistence is required for the session.
-- PortAudio installed on macOS:
-
-```bash
-brew install portaudio
-```
-
-- Voice mock dependencies installed into the selected local Python environment:
-
-```bash
-python3 -m pip install -e tools/voice_mock_telephony
-```
+- `APP_ENV=development`, `VOICE_TELEPHONY_PROVIDER=local`, `VOICE_STREAM_WS_AUTH_TOKEN`, and `TEST_ADMIN_TOKEN` configured in `.env`.
 
 ### Run a local call
 
-Set `APP_ENV=development` and `VOICE_TELEPHONY_PROVIDER=local`. Ensure the Chat Service has the same `VOICE_STREAM_WS_AUTH_TOKEN` as the mock tool, then start the relay from the repository root:
+From the repository root:
 
 ```bash
-scripts/run_voice_mock_telephony.sh --caller-phone +15555550100
+scripts/start_voice_demo_services.sh
+scripts/run_local_voice_call_tester.sh
 ```
 
-The optional caller number is only a soft ANI hint. It never authorizes account access: callers must still verify an order number plus a last name or postal code before the agent may reveal or change order-specific data. The local tool sends PCM16/16 kHz mono frames to `ws://localhost:4002/api/voice/stream`; Chat Service opens one persistent ElevenLabs real-time STT WebSocket for that call, base64-encodes and forwards frames, runs the `voice_support` agent only for a `committed_transcript`, synthesizes TTS, and records both directions.
+Open `http://127.0.0.1:4011`, start a call, and allow microphone access. The local relay keeps the Chat Service stream/admin tokens on its server side. It forwards browser PCM16/16 kHz mono frames to Chat Service and relays agent PCM audio back to the browser speaker.
 
-The upstream STT connection uses `ELEVENLABS_STT_REALTIME_WS_URL` with `model_id=scribe_v2_realtime`, `audio_format=pcm_16000`, `commit_strategy=vad`, `vad_silence_threshold_secs=1.5`, `no_verbatim=true`, and `include_timestamps=true`. `partial_transcript` packets are ephemeral: Chat Service neither persists them nor sends them to the agent, tools, or TTS. ElevenLabs VAD commits are the authoritative turn boundary; the local VAD/utterance buffer is not used. Word-end timestamps on each committed transcript trim the replay buffer, so reconnect replay includes only PCM later than the committed session-relative audio boundary.
+The optional caller number is only a soft ANI hint. It never authorizes account access: callers must still verify an order number plus a last name or postal code before the agent may reveal or change order-specific data. Chat Service opens one persistent ElevenLabs realtime STT WebSocket per call, runs the `voice_support` agent only for a committed transcript, synthesizes replies with `POST /v1/text-to-speech/{voice-id}/stream`, and records both directions.
 
-Use Ctrl+C to stop the local call. The server finalizes the call record and attempts the recording upload even if a turn fails.
+The upstream STT connection uses `ELEVENLABS_STT_REALTIME_WS_URL` with `model_id=scribe_v2_realtime`, `audio_format=pcm_16000`, `commit_strategy=vad`, `vad_silence_threshold_secs` from configuration, `no_verbatim=true`, and `include_timestamps=true`. Partial transcripts are ephemeral: Chat Service neither persists them nor sends them to the agent, tools, or TTS. ElevenLabs VAD commits are the authoritative turn boundary. Word-end timestamps on committed transcripts trim the replay buffer, so reconnect replay includes only PCM later than the committed session-relative audio boundary.
+
+Hang up in the browser to finalize the call. Use **Load artifacts** to verify the persisted call session, restricted transcript, recording status, and escalation ticket linkage. Chat Service attempts recording upload even if a turn fails.
 
 ### Safeguards and limitations
 
-- The launcher refuses to run outside `APP_ENV=development`.
+- The browser relay refuses to run outside `APP_ENV=development` and binds only to `127.0.0.1`.
 - `VOICE_TELEPHONY_PROVIDER=elevenlabs_twilio` is reserved for Phase F and fails fast; there is no Twilio, SIP, tunnel, or real phone-number implementation in v1.
-- No tunnel is needed for local use: the mock tool connects to Chat Service over localhost and Chat Service makes outbound secure WSS calls for STT plus HTTPS calls for TTS.
+- No tunnel is needed for local use: the relay connects to Chat Service over localhost and Chat Service makes outbound secure WSS calls for STT plus HTTPS calls for TTS.
 - Voice mutations require an explicit spoken `yes`, `yes please`, `please do`, or `confirm`. Other replies—including `no` and `cancel`—leave pending actions unexecuted.
-- S3 retention/lifecycle hardening remains deferred. The current implementation stores only the private bucket/key in call metadata and never exposes recording URLs to the frontend.
+- The current implementation stores only the private bucket/key in call metadata and never exposes recording URLs, S3 keys, or caller phone values to the frontend.
 
 ---
 
